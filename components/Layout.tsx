@@ -1,12 +1,12 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { UserRole, User } from '../types';
+import { db } from '../services/mockBackend';
 import { 
-  LayoutDashboard, 
   CalendarDays, 
   Users, 
-  Filter, 
   Settings, 
   Menu,
   X,
@@ -24,12 +24,25 @@ const Layout = ({ children }: LayoutProps) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string>('');
+  const [establishmentName, setEstablishmentName] = useState('TÔ NA PISTA');
 
   useEffect(() => {
     const stored = localStorage.getItem('tonapista_auth');
     if (stored) {
       setUser(JSON.parse(stored));
     }
+    
+    const fetchSettings = async () => {
+        try {
+            const s = await db.settings.get();
+            if(s.logoUrl) setLogoUrl(s.logoUrl);
+            if(s.establishmentName) setEstablishmentName(s.establishmentName);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+    fetchSettings();
   }, []);
 
   const isPublic = location.pathname === '/agendamento' || location.pathname === '/login' || location.pathname === '/';
@@ -43,92 +56,124 @@ const Layout = ({ children }: LayoutProps) => {
     navigate('/login', { replace: true });
   };
 
+  // Define os itens de navegação com a checagem de permissão
   const navItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [UserRole.ADMIN, UserRole.GESTOR] },
-    { path: '/financeiro', label: 'Financeiro', icon: PieChart, roles: [UserRole.ADMIN, UserRole.GESTOR] },
-    { path: '/agenda', label: 'Agenda', icon: CalendarDays, roles: [UserRole.ADMIN, UserRole.GESTOR] },
-    { path: '/crm', label: 'CRM', icon: Users, roles: [UserRole.ADMIN, UserRole.GESTOR] },
-    { path: '/funil', label: 'Funil', icon: Filter, roles: [UserRole.ADMIN, UserRole.GESTOR] },
-    { path: '/configuracoes', label: 'Configurações', icon: Settings, roles: [UserRole.ADMIN] },
+    { 
+        path: '/agenda', 
+        label: 'AGENDAMENTOS', 
+        icon: CalendarDays, 
+        // Exibe se for Admin OU tiver a permissão específica true
+        check: (u: User) => u.role === UserRole.ADMIN || u.perm_view_agenda 
+    },
+    { 
+        path: '/financeiro', 
+        label: 'Financeiro', 
+        icon: PieChart, 
+        check: (u: User) => u.role === UserRole.ADMIN || u.perm_view_financial 
+    },
+    { 
+        path: '/clientes', 
+        label: 'Clientes', 
+        icon: Users, 
+        check: (u: User) => u.role === UserRole.ADMIN || u.perm_view_crm 
+    },
+    { 
+        path: '/configuracoes', 
+        label: 'Configurações', 
+        icon: Settings, 
+        check: (u: User) => u.role === UserRole.ADMIN 
+    },
   ];
 
-  // Filter items based on user role
+  // Filter items based on user permissions
   const allowedItems = navItems.filter(item => 
-    !user || item.roles.includes(user.role)
+    user && item.check(user)
   );
 
   return (
     <div className="min-h-screen flex flex-col bg-neon-bg text-slate-100 font-sans">
-      {/* Header Area (Logo + Nav) */}
-      <header className="bg-neon-surface border-b border-slate-700 shadow-lg z-20 relative">
-        
-        {/* Logo Section */}
-        <div className="flex justify-between md:justify-center items-center py-4 md:py-6 px-4 border-b border-slate-700/50 bg-slate-900/30 relative">
-           
-           {/* Mobile Menu Button */}
-           <div className="md:hidden">
-              <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="text-slate-200 p-2 rounded hover:bg-slate-800">
-                {isMobileMenuOpen ? <X /> : <Menu />}
-              </button>
-           </div>
+      {/* Unified Header Area */}
+      <header className="bg-neon-surface border-b border-slate-700 shadow-lg z-20 sticky top-0">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex h-16 md:h-20 items-center justify-between">
+                
+                {/* LEFT SIDE: Mobile Trigger + Logo + Brand + Desktop Menu */}
+                <div className="flex items-center gap-6 md:gap-8 flex-1">
+                    
+                    {/* Mobile Menu Button */}
+                    <div className="md:hidden">
+                        <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="text-slate-200 p-2 rounded hover:bg-slate-800">
+                            {isMobileMenuOpen ? <X /> : <Menu />}
+                        </button>
+                    </div>
 
-           <div className="flex justify-center flex-1 md:flex-none">
-             {!imgError ? (
-               <img 
-                 src="/logo.png" 
-                 alt="Tô Na Pista" 
-                 className="h-16 md:h-24 w-auto object-contain drop-shadow-[0_0_10px_rgba(249,115,22,0.3)]" 
-                 onError={() => setImgError(true)}
-               />
-             ) : (
-               <div className="text-center">
-                 <h1 className="text-2xl md:text-3xl font-bold text-neon-orange font-sans tracking-tighter">TÔ NA PISTA</h1>
-                 <p className="text-[10px] md:text-xs text-slate-400 tracking-widest uppercase">Bowling Club System</p>
-               </div>
-             )}
-           </div>
+                    {/* Logo & Brand Name */}
+                    <div className="flex items-center gap-3 md:gap-4 flex-shrink-0">
+                        {logoUrl && !imgError ? (
+                        <img 
+                            src={logoUrl} 
+                            alt={establishmentName}
+                            className="h-10 md:h-12 w-auto object-contain drop-shadow-[0_0_8px_rgba(249,115,22,0.3)]" 
+                            onError={() => setImgError(true)}
+                        />
+                        ) : (
+                        <div className="w-10 h-10 bg-neon-orange/20 rounded-full flex items-center justify-center border border-neon-orange/50">
+                            <span className="text-neon-orange font-bold text-lg">TP</span>
+                        </div>
+                        )}
+                        
+                        <div className="flex flex-col">
+                            <h1 className="text-lg md:text-xl font-bold text-neon-orange font-sans tracking-tighter leading-none whitespace-nowrap">
+                                {establishmentName.toUpperCase()}
+                            </h1>
+                            <p className="text-[9px] text-slate-400 tracking-widest uppercase hidden md:block">
+                                Sistema de Gestão
+                            </p>
+                        </div>
+                    </div>
 
-           {/* Desktop Logout (Absolute Right) */}
-           <div className="hidden md:block absolute right-8 top-1/2 transform -translate-y-1/2">
-              <div className="flex items-center gap-4">
-                  {user && (
-                      <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">{user.name}</span>
-                  )}
-                  <button 
-                    onClick={handleLogout}
-                    className="flex items-center gap-2 text-slate-400 hover:text-red-400 transition font-medium text-sm bg-slate-800/50 px-3 py-2 rounded-lg hover:bg-slate-800"
-                    title="Sair do Sistema"
-                  >
-                    <LogOut size={16} /> Sair
-                  </button>
-              </div>
-           </div>
+                    {/* Desktop Navigation (Embedded in the Bar) */}
+                    <nav className="hidden md:flex items-center gap-1 ml-4 overflow-x-auto no-scrollbar">
+                        {allowedItems.map((item) => {
+                        const isActive = location.pathname === item.path;
+                        return (
+                            <Link
+                            key={item.path}
+                            to={item.path}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-all duration-200 border border-transparent whitespace-nowrap ${
+                                isActive 
+                                ? 'bg-slate-800 text-neon-orange border-slate-700 shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
+                            }`}
+                            >
+                            <item.icon size={16} />
+                            <span>{item.label}</span>
+                            </Link>
+                        );
+                        })}
+                    </nav>
+                </div>
 
-           {/* Mobile Logout (Placeholder for spacing) */}
-           <div className="md:hidden w-10"></div>
-        </div>
+                {/* RIGHT SIDE: User Profile & Logout */}
+                <div className="flex items-center gap-4 flex-shrink-0">
+                    <div className="hidden md:flex flex-col items-end mr-2">
+                         {user && (
+                            <>
+                                <span className="text-xs text-white font-bold">{user.name}</span>
+                                <span className="text-[10px] text-slate-500 uppercase">{user.role === UserRole.GESTOR ? 'Usuário' : user.role}</span>
+                            </>
+                        )}
+                    </div>
+                    <button 
+                        onClick={handleLogout}
+                        className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
+                        title="Sair do Sistema"
+                    >
+                        <LogOut size={20} />
+                    </button>
+                </div>
 
-        {/* Desktop Navigation (Horizontal below logo) */}
-        <div className="hidden md:flex justify-center items-center bg-slate-900/50">
-          <nav className="flex items-center">
-            {allowedItems.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className={`flex items-center gap-2 px-6 py-4 text-sm font-bold uppercase tracking-wide transition-all duration-200 border-b-2 ${
-                    isActive 
-                      ? 'text-neon-orange border-neon-orange bg-slate-800/50' 
-                      : 'text-slate-400 border-transparent hover:text-slate-100 hover:bg-slate-800'
-                  }`}
-                >
-                  <item.icon size={18} />
-                  <span>{item.label}</span>
-                </Link>
-              );
-            })}
-          </nav>
+            </div>
         </div>
       </header>
 
@@ -171,7 +216,7 @@ const Layout = ({ children }: LayoutProps) => {
       )}
 
       {/* Main Content */}
-      <main className="flex-1 p-4 md:p-8 overflow-y-auto w-full max-w-7xl mx-auto">
+      <main className="flex-1 p-4 md:p-8 overflow-y-auto w-full max-w-[1600px] mx-auto">
         {children}
       </main>
     </div>

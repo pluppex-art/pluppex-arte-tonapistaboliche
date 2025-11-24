@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { db } from '../services/mockBackend';
@@ -19,22 +20,25 @@ const Login: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const user = await db.users.find(email);
+      // Use the refactored login function with plain text comparison and specific column mapping
+      const { user, error: loginError } = await db.users.login(email, password);
       
-      if (user && user.passwordHash === password) {
-        // Store basic simulated session
+      if (loginError || !user) {
+        setError(loginError || 'E-mail ou senha inválidos.');
+      } else {
+        // Auth Success
         localStorage.setItem('tonapista_auth', JSON.stringify(user));
+        
+        // Redirect based on role
         if (user.role === UserRole.ADMIN || user.role === UserRole.GESTOR) {
-          navigate('/dashboard');
+          navigate('/agenda'); // Redirect to Agenda (Operations Dashboard)
         } else {
           setError('Acesso não autorizado para este perfil.');
         }
-      } else {
-        setError('E-mail ou senha inválidos.');
       }
     } catch (err) {
       console.error(err);
-      setError('Erro ao conectar com o servidor.');
+      setError('Erro ao processar login.');
     } finally {
       setIsLoading(false);
     }

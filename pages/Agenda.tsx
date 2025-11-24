@@ -1,15 +1,13 @@
 
 import React, { useEffect, useState } from 'react';
 import { db } from '../services/mockBackend';
-import { Reservation, ReservationStatus, AppSettings, FunnelStage, EventType } from '../types';
+import { Reservation, ReservationStatus, AppSettings, FunnelStage, EventType, User, UserRole } from '../types';
 import { INITIAL_SETTINGS } from '../constants';
-import { ChevronLeft, ChevronRight, Calendar, LayoutGrid, X, Clock, Users, PlusCircle, Pencil, Save, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LayoutGrid, X, Users, PlusCircle, Pencil, Save, Loader2, Calendar, Check, Ban, AlertCircle, Plus, Phone } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 
 const Agenda: React.FC = () => {
-  const [viewMode, setViewMode] = useState<'INTERNAL' | 'GOOGLE'>('INTERNAL');
-  
   // Initialize with today's date (Local Time)
   const [selectedDate, setSelectedDate] = useState(() => {
     const now = new Date();
@@ -20,21 +18,96 @@ const Agenda: React.FC = () => {
   });
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [clientPhones, setClientPhones] = useState<Record<string, string>>({}); // Map clientId -> phone
   const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
   const [loading, setLoading] = useState(true);
   
+  // Auth State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  // Metrics State
+  const [metrics, setMetrics] = useState({
+      totalSlots: 0,
+      pendingSlots: 0,
+      confirmedSlots: 0, 
+      checkInSlots: 0,
+      noShowSlots: 0
+  });
+
   // Modal & Editing State
   const [editingRes, setEditingRes] = useState<Reservation | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Reservation>>({});
+  
+  // Multi-select Time State
+  const [selectedEditTimes, setSelectedEditTimes] = useState<string[]>([]);
+  const [availableSlots, setAvailableSlots] = useState<{time: string, label: string, available: boolean, left: number, isPast?: boolean}[]>([]);
+  const [calculatingSlots, setCalculatingSlots] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem('tonapista_auth');
+    if (stored) setCurrentUser(JSON.parse(stored));
+  }, []);
+
+  // Permissions Helpers
+  const canCreate = currentUser?.role === UserRole.ADMIN || currentUser?.perm_create_reservation;
+  const canEdit = currentUser?.role === UserRole.ADMIN || currentUser?.perm_edit_reservation;
+  const canDelete = currentUser?.role === UserRole.ADMIN || currentUser?.perm_delete_reservation;
 
   const loadData = async () => {
     setLoading(true);
     try {
       const s = await db.settings.get();
       setSettings(s);
-      const all = await db.reservations.getAll();
-      setReservations(all.filter(r => r.date === selectedDate));
+      
+      const [allReservations, allClients] = await Promise.all([
+          db.reservations.getAll(),
+          db.clients.getAll()
+      ]);
+
+      // Create Phone Map
+      const phoneMap: Record<string, string> = {};
+      allClients.forEach(c => {
+          phoneMap[c.id] = c.phone;
+      });
+      setClientPhones(phoneMap);
+
+      const dayReservations = allReservations.filter(r => r.date === selectedDate && r.status !== ReservationStatus.CANCELADA);
+      setReservations(dayReservations);
+
+      // --- Calculate KPIs based on Granular Slots ---
+      let total = 0;
+      let pending = 0;
+      let confirmed = 0;
+      let checkIn = 0;
+      let noShow = 0;
+
+      dayReservations.forEach(r => {
+          const slotCount = r.laneCount * r.duration;
+          total += slotCount;
+
+          // Granular Counts from Arrays
+          const currentCheckIns = r.checkedInIds?.length || 0;
+          const currentNoShows = r.noShowIds?.length || 0;
+          
+          checkIn += currentCheckIns;
+          noShow += currentNoShows;
+
+          if (r.status === ReservationStatus.PENDENTE) {
+              pending += slotCount;
+          } else {
+              confirmed += slotCount;
+          }
+      });
+
+      setMetrics({
+          totalSlots: total,
+          pendingSlots: pending,
+          confirmedSlots: confirmed,
+          checkInSlots: checkIn,
+          noShowSlots: noShow
+      });
+
     } finally {
       setLoading(false);
     }
@@ -44,7 +117,144 @@ const Agenda: React.FC = () => {
     loadData();
   }, [selectedDate]);
 
-  // Reset Edit Mode when closing modal
+  // --- ACTIONS GRANULARES ---
+  const handleGranularStatus = async (e: React.MouseEvent, res: Reservation, uniqueId: string, type: 'CHECK_IN' | 'NO_SHOW') => {
+      e.stopPropagation(); // Impede abrir o modal de edição ao clicar no botão
+      
+      if (!canEdit) return; // Security Check
+
+      const currentCheckedInIds = res.checkedInIds || [];
+      const currentNoShowIds = res.noShowIds || [];
+      
+      let newCheckedInIds = [...currentCheckedInIds];
+      let newNoShowIds = [...currentNoShowIds];
+
+      if (type === 'CHECK_IN') {
+          // Se já está checked-in, remove (toggle). Se não, adiciona.
+          if (newCheckedInIds.includes(uniqueId)) {
+               newCheckedInIds = newCheckedInIds.filter(id => id !== uniqueId);
+          } else {
+               newCheckedInIds.push(uniqueId);
+               // Garante que não está em no-show
+               newNoShowIds = newNoShowIds.filter(id => id !== uniqueId);
+          }
+      } else if (type === 'NO_SHOW') {
+          // Se já está no-show, remove (toggle). Se não, adiciona.
+          if (newNoShowIds.includes(uniqueId)) {
+               newNoShowIds = newNoShowIds.filter(id => id !== uniqueId);
+          } else {
+               newNoShowIds.push(uniqueId);
+               // Garante que não está em check-in
+               newCheckedInIds = newCheckedInIds.filter(id => id !== uniqueId);
+          }
+      }
+
+      const updatedRes = { 
+          ...res, 
+          checkedInIds: newCheckedInIds,
+          noShowIds: newNoShowIds
+      };
+
+      setReservations(prev => prev.map(r => r.id === res.id ? updatedRes : r));
+      await db.reservations.update(updatedRes);
+      loadData();
+  };
+
+  // --- SLOT CALCULATION FOR EDIT ---
+  useEffect(() => {
+    const calculateSlots = async () => {
+        if (!isEditMode || !editingRes) return;
+        const targetDate = editForm.date || editingRes.date;
+        if (!targetDate) return;
+
+        setCalculatingSlots(true);
+
+        const targetLanes = editForm.laneCount || editingRes.laneCount || 1;
+        const allRes = await db.reservations.getAll();
+        
+        const dayRes = allRes.filter(r => 
+            r.date === targetDate && 
+            r.id !== editingRes.id && 
+            r.status !== ReservationStatus.CANCELADA
+        );
+
+        const [y, m, d] = targetDate.split('-').map(Number);
+        const dateObj = new Date(y, m - 1, d);
+        const day = dateObj.getDay();
+        
+        // Get day configuration
+        const dayConfig = settings.businessHours[day];
+        let start = 18;
+        let end = 24;
+
+        if (dayConfig && dayConfig.isOpen) {
+            start = dayConfig.start;
+            end = dayConfig.end;
+            if (end === 0) end = 24;
+            if (end < start) end += 24; // Handle late night
+        } else {
+             // Closed logic
+             setAvailableSlots([]);
+             setCalculatingSlots(false);
+             return;
+        }
+
+        const now = new Date();
+        const todayStr = [
+            now.getFullYear(),
+            String(now.getMonth() + 1).padStart(2, '0'),
+            String(now.getDate()).padStart(2, '0')
+        ].join('-');
+        const isToday = targetDate === todayStr;
+        const currentHour = now.getHours();
+
+        const slots = [];
+        for (let h = start; h < end; h++) {
+            // Normalize hour for display
+            const displayHour = h >= 24 ? h - 24 : h;
+            
+            let occupied = 0;
+            dayRes.forEach(r => {
+                const rStart = parseInt(r.time.split(':')[0]);
+                const rEnd = rStart + r.duration;
+                // Simple logic check for overlap
+                if (displayHour >= rStart && displayHour < rEnd) {
+                    occupied += r.laneCount;
+                }
+            });
+            const left = settings.activeLanes - occupied;
+            const isPast = isToday && (displayHour < currentHour || (displayHour === currentHour)); 
+            const isAvailable = left >= targetLanes && !isPast;
+
+            slots.push({
+                time: `${displayHour}:00`,
+                label: `${displayHour}:00`,
+                available: isAvailable,
+                left: isAvailable ? left : 0,
+                isPast: isPast
+            });
+        }
+        setAvailableSlots(slots);
+        setCalculatingSlots(false);
+    };
+
+    calculateSlots();
+  }, [isEditMode, editForm.date, editForm.laneCount, editingRes, settings]);
+
+
+  const toggleEditTime = (time: string) => {
+      setSelectedEditTimes(prev => {
+          let newTimes;
+          if (prev.includes(time)) {
+              newTimes = prev.filter(t => t !== time);
+          } else {
+              newTimes = [...prev, time].sort((a, b) => parseInt(a) - parseInt(b));
+          }
+          setEditForm(f => ({ ...f, duration: newTimes.length }));
+          return newTimes;
+      });
+  };
+
   const closeResModal = () => {
     setEditingRes(null);
     setIsEditMode(false);
@@ -54,62 +264,143 @@ const Agenda: React.FC = () => {
   const openResModal = (res: Reservation) => {
     setEditingRes(res);
     setIsEditMode(false);
+    const times = [];
+    const startHour = parseInt(res.time.split(':')[0]);
+    for(let i=0; i<res.duration; i++) {
+        // Simple sequential addition. Doesn't account for midnight wrap in this simplified view yet
+        times.push(`${startHour + i}:00`);
+    }
+    setSelectedEditTimes(times);
     setEditForm({
+        date: res.date,
         peopleCount: res.peopleCount,
         laneCount: res.laneCount,
         time: res.time,
         observations: res.observations,
-        eventType: res.eventType
+        eventType: res.eventType,
+        duration: res.duration
     });
+  };
+
+  // --- SAFETY CHECK FOR EDIT ---
+  const validateEditAvailability = async (reservationId: string, date: string, times: string[], lanesRequired: number) => {
+      const allReservations = await db.reservations.getAll();
+      const currentSettings = await db.settings.get();
+      const maxLanes = currentSettings.activeLanes;
+      
+      const otherReservations = allReservations.filter(r => 
+        r.date === date && 
+        r.id !== reservationId && 
+        r.status !== ReservationStatus.CANCELADA
+      );
+
+      // Check each requested hour
+      for (const timeStr of times) {
+          const checkHour = parseInt(timeStr.split(':')[0]);
+          let occupied = 0;
+          
+          otherReservations.forEach(r => {
+             const rStart = parseInt(r.time.split(':')[0]);
+             const rEnd = rStart + r.duration;
+             if (checkHour >= rStart && checkHour < rEnd) {
+                 occupied += r.laneCount;
+             }
+          });
+
+          if (occupied + lanesRequired > maxLanes) {
+              return { valid: false, message: `Horário ${checkHour}:00 lotado! Disp: ${maxLanes - occupied}, Req: ${lanesRequired}` };
+          }
+      }
+      return { valid: true };
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
       e.preventDefault();
-      if(editingRes && editForm) {
-          const updated = { ...editingRes, ...editForm };
-          await db.reservations.update(updated);
-          
-          setIsEditMode(false);
-          setEditingRes(updated);
-          loadData();
+      if (!canEdit) {
+          alert("Você não tem permissão para editar reservas.");
+          return;
+      }
+
+      if(editingRes && editForm && selectedEditTimes.length > 0) {
+          setLoading(true);
+          try {
+             // 1. Validate Availability
+             const reqLanes = editForm.laneCount || editingRes.laneCount || 1;
+             const reqDate = editForm.date || editingRes.date;
+             
+             const validation = await validateEditAvailability(editingRes.id, reqDate, selectedEditTimes, reqLanes);
+             if (!validation.valid) {
+                 alert(validation.message);
+                 setLoading(false);
+                 return;
+             }
+
+             const sortedHours = selectedEditTimes.map(t => parseInt(t.split(':')[0])).sort((a,b) => a - b);
+             const blocks: { time: string, duration: number }[] = [];
+             
+             let currentStart = sortedHours[0];
+             let currentDuration = 1;
+
+             for (let i = 1; i < sortedHours.length; i++) {
+                 if (sortedHours[i] === sortedHours[i-1] + 1) {
+                     currentDuration++;
+                 } else {
+                     blocks.push({ time: `${currentStart}:00`, duration: currentDuration });
+                     currentStart = sortedHours[i];
+                     currentDuration = 1;
+                 }
+             }
+             blocks.push({ time: `${currentStart}:00`, duration: currentDuration });
+
+             const firstBlock = blocks[0];
+             const updated = { 
+                 ...editingRes, 
+                 ...editForm, 
+                 time: firstBlock.time, 
+                 duration: firstBlock.duration 
+             };
+             await db.reservations.update(updated);
+             
+             if (blocks.length > 1) {
+                  for (let i = 1; i < blocks.length; i++) {
+                      const block = blocks[i];
+                      const newResId = uuidv4();
+                      const newRes: Reservation = {
+                          ...updated, // Copy
+                          id: newResId,
+                          time: block.time,
+                          duration: block.duration,
+                          createdAt: new Date().toISOString()
+                      };
+                      await db.reservations.create(newRes);
+                  }
+             }
+             
+             setIsEditMode(false);
+             setEditingRes(updated);
+             loadData();
+          } catch (error) {
+             console.error(error);
+             alert("Erro ao salvar.");
+          } finally {
+             setLoading(false);
+          }
       }
   };
 
   const handleStatusChange = async (status: ReservationStatus) => {
     if (editingRes) {
-      const updated = { ...editingRes, status };
-      await db.reservations.update(updated);
-
-      if (status === ReservationStatus.CONFIRMADA) {
-          const isToday = editingRes.date === new Date().toISOString().split('T')[0];
-          const allFunnel = await db.funnel.getAll();
-          const cardIndex = allFunnel.findIndex(f => f.clientId === editingRes.clientId && f.stage !== FunnelStage.POS_EVENTO);
-          
-          if (cardIndex >= 0) {
-             if (isToday) {
-                 allFunnel[cardIndex].stage = FunnelStage.POS_EVENTO;
-             } else {
-                 allFunnel[cardIndex].stage = FunnelStage.AGENDADO;
-             }
-             await db.funnel.update(allFunnel);
-          }
-
-          const allClients = await db.clients.getAll();
-          const client = allClients.find(c => c.id === editingRes.clientId);
-          if (client) {
-              client.lastContactAt = new Date().toISOString();
-              await db.clients.update(client);
-          }
-
-          await db.interactions.add({
-            id: uuidv4(),
-            clientId: editingRes.clientId,
-            date: new Date().toISOString(),
-            channel: 'Outro',
-            note: `Status alterado para CONFIRMADA via Agenda.`
-          });
+      if (status === ReservationStatus.CANCELADA && !canDelete) {
+          alert("Você não tem permissão para cancelar/excluir reservas.");
+          return;
+      }
+      if (status !== ReservationStatus.CANCELADA && !canEdit) {
+          alert("Você não tem permissão para editar o status.");
+          return;
       }
 
+      const updated = { ...editingRes, status };
+      await db.reservations.update(updated);
       setEditingRes(null);
       loadData();
     }
@@ -129,80 +420,152 @@ const Agenda: React.FC = () => {
     const [y, m, d] = selectedDate.split('-').map(Number);
     const date = new Date(y, m - 1, d);
     const day = date.getDay();
-    const isWeekend = day === 0 || day === 6;
+    
+    const dayConfig = settings.businessHours[day];
+    if (!dayConfig || !dayConfig.isOpen) return [];
 
-    let start = isWeekend ? settings.weekendStart : settings.weekDayStart;
-    let end = isWeekend ? settings.weekendEnd : settings.weekDayEnd;
+    let start = dayConfig.start;
+    let end = dayConfig.end;
     if (end === 0) end = 24;
-    if (start >= end) { start = 18; end = 24; }
+    if (end < start) end += 24;
 
     const hours = [];
     for (let h = start; h < end; h++) {
-      hours.push(`${h}:00`);
+      const displayHour = h >= 24 ? h - 24 : h;
+      hours.push(`${displayHour}:00`);
     }
     return hours;
   };
 
-  const getStatusColor = (status: ReservationStatus) => {
+  // Helper para cor do card, considerando granularidade e novos padrões
+  const getCardStyle = (status: ReservationStatus, isCheckIn: boolean, isNoShow: boolean) => {
+    if (isCheckIn) return 'border-green-500 bg-slate-900 opacity-60 grayscale-[0.3]';
+    if (isNoShow) return 'border-red-500 bg-red-900/10 grayscale-[0.5] opacity-70';
+    
     switch (status) {
-      case ReservationStatus.CHECK_IN: return 'border-neon-green bg-green-500/20 text-green-300';
-      case ReservationStatus.CONFIRMADA: return 'border-neon-blue bg-blue-500/10 text-blue-300';
-      case ReservationStatus.PENDENTE: return 'border-yellow-500/50 bg-yellow-500/10 text-yellow-400';
-      case ReservationStatus.CANCELADA: return 'border-red-500/50 bg-red-900/10 text-red-400';
-      case ReservationStatus.NO_SHOW: return 'border-slate-500/50 bg-slate-800 text-slate-400';
-      default: return 'border-slate-700 bg-slate-800 text-slate-300';
+      case ReservationStatus.CONFIRMADA: return 'border-green-500 bg-green-900/20';
+      case ReservationStatus.PENDENTE: return 'border-yellow-500/50 bg-yellow-900/10';
+      case ReservationStatus.CANCELADA: return 'border-red-500/30 bg-red-900/10';
+      default: return 'border-slate-700 bg-slate-800';
     }
+  };
+
+  const formatDateDisplay = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}/${y}`;
   };
 
   return (
     <div className="flex flex-col h-full space-y-6 pb-20 md:pb-0">
-      {/* Top Controls */}
-      <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-bold text-white">Agenda</h1>
-          <div className="flex bg-slate-800 rounded-lg p-1 border border-slate-700 ml-4">
-            <button 
-              onClick={() => setViewMode('INTERNAL')}
-              className={`px-3 py-1.5 rounded flex items-center gap-2 text-sm font-medium transition ${viewMode === 'INTERNAL' ? 'bg-neon-blue text-white shadow' : 'text-slate-400 hover:text-white'}`}
-            >
-              <LayoutGrid size={16} /> Lista
-            </button>
-            <button 
-              onClick={() => setViewMode('GOOGLE')}
-              className={`px-3 py-1.5 rounded flex items-center gap-2 text-sm font-medium transition ${viewMode === 'GOOGLE' ? 'bg-neon-orange text-white shadow' : 'text-slate-400 hover:text-white'}`}
-            >
-              <Calendar size={16} /> Google
-            </button>
-          </div>
+      
+      {/* Top Header & Controls */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-4">
+        <div>
+          <h1 className="text-3xl font-bold text-white tracking-tight">Dashboard</h1>
+          <p className="text-slate-400 text-sm">Gestão de {formatDateDisplay(selectedDate)}</p>
         </div>
         
-        {viewMode === 'INTERNAL' && (
-          <div className="flex items-center gap-4 bg-slate-800 p-2 rounded-lg border border-slate-700 shadow-sm w-full md:w-auto justify-between md:justify-start">
+        <div className="flex flex-col sm:flex-row gap-4 w-full md:w-auto">
+            <div className="flex items-center gap-4 bg-slate-800 p-2 rounded-lg border border-slate-700 shadow-sm w-full md:w-auto justify-between md:justify-start">
             <button onClick={() => changeDate(-1)} className="p-2 hover:bg-slate-700 rounded-full text-slate-300">
-              <ChevronLeft size={20} />
+                <ChevronLeft size={20} />
             </button>
             <input 
-              type="date" 
-              className="bg-transparent text-white font-bold text-center focus:outline-none"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
+                type="date" 
+                className="bg-transparent text-white font-bold text-center focus:outline-none"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
             />
             <button onClick={() => changeDate(1)} className="p-2 hover:bg-slate-700 rounded-full text-slate-300">
-              <ChevronRight size={20} />
+                <ChevronRight size={20} />
             </button>
-          </div>
-        )}
+            </div>
+            
+            {canCreate && (
+                <Link 
+                    to="/agendamento"
+                    className="bg-neon-orange hover:bg-orange-500 text-white px-6 py-3 rounded-lg font-bold shadow-lg flex items-center justify-center gap-2 transition"
+                >
+                    <Plus size={20} />
+                    <span className="hidden sm:inline">Nova Reserva</span>
+                    <span className="sm:hidden">Nova</span>
+                </Link>
+            )}
+        </div>
       </div>
 
-      <div className="flex-1 bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-2xl flex flex-col min-h-[600px]">
-        
-        {loading && viewMode === 'INTERNAL' ? (
+      {/* KPI CARDS - THIN HORIZONTAL STYLE */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+         {/* Total */}
+         <div className="bg-slate-800 p-3 rounded-xl border border-slate-700 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-700/50 rounded-lg text-slate-400">
+                    <Calendar size={18} />
+                </div>
+                <span className="text-xs text-slate-400 uppercase font-bold">Total</span>
+            </div>
+            <span className="text-2xl font-bold text-white">{loading ? '-' : metrics.totalSlots}</span>
+         </div>
+
+         {/* Pendentes */}
+         <div className="bg-slate-800 p-3 rounded-xl border border-yellow-500/30 flex items-center justify-between shadow-sm">
+             <div className="flex items-center gap-3">
+                <div className="p-2 bg-yellow-500/10 rounded-lg text-yellow-500">
+                    <AlertCircle size={18} />
+                </div>
+                <span className="text-xs text-yellow-500 uppercase font-bold">Pendentes</span>
+             </div>
+             <span className="text-2xl font-bold text-yellow-500">{loading ? '-' : metrics.pendingSlots}</span>
+         </div>
+
+         {/* Confirmadas */}
+         <div className="bg-slate-800 p-3 rounded-xl border border-green-500/30 flex items-center justify-between shadow-sm">
+             <div className="flex items-center gap-3">
+                <div className="p-2 bg-green-500/10 rounded-lg text-green-500">
+                    <Check size={18} />
+                </div>
+                <span className="text-xs text-green-500 uppercase font-bold">Confirmadas</span>
+             </div>
+             <span className="text-2xl font-bold text-green-500">{loading ? '-' : metrics.confirmedSlots}</span>
+         </div>
+
+         {/* Check-in */}
+         <div className="bg-green-900/20 p-3 rounded-xl border border-green-500/30 flex items-center justify-between shadow-sm">
+             <div className="flex items-center gap-3">
+                <div className="p-2 bg-green-500/20 rounded-lg text-green-400">
+                    <Users size={18} />
+                </div>
+                <span className="text-xs text-green-400 uppercase font-bold">Check-in</span>
+             </div>
+             <span className="text-2xl font-bold text-green-400">{loading ? '-' : metrics.checkInSlots}</span>
+         </div>
+
+         {/* No-Show */}
+         <div className="bg-red-900/20 p-3 rounded-xl border border-red-500/30 flex items-center justify-between shadow-sm">
+             <div className="flex items-center gap-3">
+                <div className="p-2 bg-red-500/20 rounded-lg text-red-400">
+                    <Ban size={18} />
+                </div>
+                <span className="text-xs text-red-400 uppercase font-bold">No-Show</span>
+             </div>
+             <span className="text-2xl font-bold text-red-500">{loading ? '-' : metrics.noShowSlots}</span>
+         </div>
+      </div>
+
+      <div className="flex-1 bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-2xl flex flex-col min-h-[500px]">
+        {loading ? (
           <div className="flex-1 flex justify-center items-center">
             <Loader2 className="animate-spin text-neon-blue" size={48} />
           </div>
-        ) : viewMode === 'INTERNAL' ? (
+        ) : (
           <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-             {getDailyHours().map(hour => {
+             {getDailyHours().length === 0 ? (
+                 <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                     <Ban size={48} className="mb-4 opacity-20"/>
+                     <p>Estabelecimento fechado neste dia.</p>
+                 </div>
+             ) : (
+             getDailyHours().map(hour => {
                const currentHourInt = parseInt(hour.split(':')[0]);
                const hourReservations = reservations.filter(r => {
                  if (r.status === ReservationStatus.CANCELADA) return false;
@@ -219,16 +582,9 @@ const Agenda: React.FC = () => {
                     <div className="bg-slate-900 p-3 flex justify-between items-center border-b border-slate-700">
                        <div className="flex items-center gap-3">
                          <span className="text-xl font-bold text-neon-blue">{hour}</span>
-                         <Link 
-                            to="/agendamento" 
-                            className="text-slate-500 hover:text-neon-green transition transform hover:scale-110"
-                            title="Adicionar reserva neste horário"
-                         >
-                            <PlusCircle size={20} />
-                         </Link>
                          <div className="h-4 w-[1px] bg-slate-700 mx-2"></div>
                          <span className="text-sm text-slate-500">
-                           {lanesOccupied} / {settings.activeLanes} Pistas ocupadas
+                           {lanesOccupied} / {settings.activeLanes} Pistas
                          </span>
                        </div>
                        <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden">
@@ -241,79 +597,105 @@ const Agenda: React.FC = () => {
 
                     <div className="p-3">
                        {hourReservations.length === 0 ? (
-                         <div className="flex justify-between items-center py-2 px-2 text-slate-600 italic text-sm">
-                           <span>Nenhum agendamento.</span>
-                           <Link to="/agendamento" className="text-neon-blue/50 hover:text-neon-blue text-xs font-bold flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                             <PlusCircle size={12} /> Agendar
-                           </Link>
+                         <div className="py-2 px-2 text-slate-600 italic text-sm">
+                           Disponível
                          </div>
                        ) : (
                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                           {hourReservations.map(res => {
-                             const isStart = parseInt(res.time.split(':')[0]) === currentHourInt;
-                             return (
+                           {/* Loop Cards with Granular Logic */}
+                           {hourReservations.flatMap(res => {
+                             // Only fallback if laneCount is unexpectedly 0
+                             const numberOfCards = Math.max(1, res.laneCount || 1);
+                             const clientPhone = clientPhones[res.clientId] || '';
+                             
+                             return Array.from({ length: numberOfCards }).map((_, laneIndex) => {
+                               // Generate consistent ID for this slot
+                               const uniqueId = `${res.id}_${currentHourInt}:00_${laneIndex+1}`;
+                               
+                               const isCheckedIn = res.checkedInIds?.includes(uniqueId) || false;
+                               const isNoShow = res.noShowIds?.includes(uniqueId) || false;
+                               
+                               const cardStyle = getCardStyle(res.status, isCheckedIn, isNoShow);
+
+                               return (
                                <div 
-                                  key={res.id}
+                                  key={uniqueId}
                                   onClick={() => openResModal(res)}
-                                  className={`relative p-4 rounded-lg border cursor-pointer hover:bg-slate-800 transition ${getStatusColor(res.status)}`}
+                                  className={`relative p-3 rounded-lg border cursor-pointer hover:bg-slate-800 transition ${cardStyle}`}
                                >
                                   <div className="flex justify-between items-start mb-2">
-                                    <h4 className="font-bold truncate pr-2">{res.clientName}</h4>
-                                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-black/20">
-                                      {res.status}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-4 text-xs opacity-80 mb-2">
-                                     <span className="flex items-center gap-1"><Users size={12}/> {res.peopleCount}</span>
-                                     <span className="flex items-center gap-1"><LayoutGrid size={12}/> {res.laneCount} Pista(s)</span>
-                                  </div>
-                                  <div className="flex justify-between items-end">
-                                    <div className="text-xs font-mono bg-black/20 p-1 rounded inline-block">
-                                      {res.eventType}
+                                    <div className="min-w-0 pr-2">
+                                        <h4 className={`font-bold truncate text-sm flex items-center gap-2 ${isNoShow ? 'line-through text-slate-500' : 'text-white'}`}>
+                                            {res.clientName} 
+                                        </h4>
+                                        {/* Phone Number Display */}
+                                        <div className="flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
+                                            <Phone size={10} /> {clientPhone || 'Sem telefone'}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 mt-2">
+                                            {/* Status Badge Granular */}
+                                            {isCheckedIn ? (
+                                                <span className="text-[10px] font-bold text-green-400 bg-green-500/20 px-1 rounded uppercase">CHECK-IN</span>
+                                            ) : isNoShow ? (
+                                                <span className="text-[10px] font-bold text-red-400 bg-red-500/20 px-1 rounded uppercase">NO-SHOW</span>
+                                            ) : (
+                                                <span className={`text-[10px] font-bold px-1 rounded uppercase ${
+                                                    res.status === ReservationStatus.CONFIRMADA ? 'text-green-400 bg-green-900/40 border border-green-500/30' :
+                                                    res.status === ReservationStatus.PENDENTE ? 'text-yellow-400 bg-yellow-900/40 border border-yellow-500/30' :
+                                                    'text-slate-400 bg-slate-800'
+                                                }`}>
+                                                    {res.status}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
-                                    {!isStart && (
-                                      <span className="text-[10px] text-white/50 italic">(Continuação)</span>
-                                    )}
+
+                                    {/* Action Buttons: V and X */}
+                                    <div className="flex gap-1">
+                                        <button 
+                                            disabled={!canEdit}
+                                            onClick={(e) => handleGranularStatus(e, res, uniqueId, 'CHECK_IN')}
+                                            className={`w-7 h-7 flex items-center justify-center rounded border transition ${!canEdit ? 'opacity-50 cursor-not-allowed bg-slate-800 border-slate-700' : (isCheckedIn ? 'bg-green-500 text-white border-green-400' : 'bg-slate-800 text-slate-500 border-slate-600 hover:text-green-400 hover:border-green-500')}`}
+                                            title="Check-in"
+                                        >
+                                            <Check size={14} strokeWidth={3} />
+                                        </button>
+                                        <button 
+                                            disabled={!canEdit}
+                                            onClick={(e) => handleGranularStatus(e, res, uniqueId, 'NO_SHOW')}
+                                            className={`w-7 h-7 flex items-center justify-center rounded border transition ${!canEdit ? 'opacity-50 cursor-not-allowed bg-slate-800 border-slate-700' : (isNoShow ? 'bg-red-500 text-white border-red-400' : 'bg-slate-800 text-slate-500 border-slate-600 hover:text-red-400 hover:border-red-500')}`}
+                                            title="No-Show"
+                                        >
+                                            <X size={14} strokeWidth={3} />
+                                        </button>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="flex items-center gap-3 text-xs opacity-70 mb-1">
+                                     <span className="flex items-center gap-1"><Users size={12}/> {Math.ceil(res.peopleCount / numberOfCards)}~</span>
+                                     <span className="truncate max-w-[100px]">{res.eventType}</span>
                                   </div>
                                </div>
-                             );
+                             )});
                            })}
                          </div>
                        )}
                     </div>
                  </div>
                );
-             })}
-          </div>
-        ) : (
-          <div className="flex-1 w-full h-full bg-white relative">
-             <iframe 
-              src={`https://calendar.google.com/calendar/embed?src=${settings.calendarId}&ctz=America%2FSao_Paulo`}
-              style={{border: 0}} 
-              width="100%" 
-              height="100%" 
-              title="Google Calendar"
-            ></iframe>
-            {!settings.googleCalendarEnabled && (
-                <div className="absolute inset-0 bg-slate-900/80 flex items-center justify-center">
-                    <div className="text-center p-6">
-                        <h3 className="text-xl font-bold text-white mb-2">Integração Desativada</h3>
-                        <p className="text-slate-400">Ative o Google Calendar nas configurações.</p>
-                        <Link to="/configuracoes" className="mt-4 inline-block px-4 py-2 bg-neon-blue rounded text-white font-bold">Ir para Configurações</Link>
-                    </div>
-                </div>
-            )}
+             }))}
           </div>
         )}
       </div>
 
       {editingRes && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-800 border border-slate-600 w-full max-w-lg rounded-2xl shadow-2xl animate-scale-in">
+          <div className="bg-slate-800 border border-slate-600 w-full max-w-2xl rounded-2xl shadow-2xl animate-scale-in flex flex-col max-h-[90vh]">
             <div className="p-6 border-b border-slate-700 flex justify-between items-center">
               <div className="flex items-center gap-3">
                  <h3 className="text-xl font-bold text-white">Detalhes da Reserva</h3>
-                 {!isEditMode && (
+                 {!isEditMode && canEdit && (
                      <button 
                         onClick={() => setIsEditMode(true)}
                         className="p-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition"
@@ -328,11 +710,14 @@ const Agenda: React.FC = () => {
             
             {!isEditMode ? (
                 // --- VIEW MODE ---
-                <div className="p-6 space-y-4">
+                <div className="p-6 space-y-4 overflow-y-auto">
                     <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
                         <p className="text-slate-400">Cliente</p>
                         <p className="text-white font-medium text-lg">{editingRes.clientName}</p>
+                        <p className="text-slate-500 flex items-center gap-1 text-xs mt-1">
+                            <Phone size={12}/> {clientPhones[editingRes.clientId] || 'Sem telefone'}
+                        </p>
                         </div>
                         <div>
                         <p className="text-slate-400">Tipo</p>
@@ -344,7 +729,7 @@ const Agenda: React.FC = () => {
                         <p className="text-xs text-slate-500">Duração: {editingRes.duration}h</p>
                         </div>
                         <div>
-                        <p className="text-slate-400">Pistas</p>
+                        <p className="text-slate-400">Pistas (Total)</p>
                         <p className="text-white font-medium">
                             {editingRes.laneCount} Pista(s) / {editingRes.peopleCount} Pessoas
                         </p>
@@ -356,29 +741,26 @@ const Agenda: React.FC = () => {
                     </div>
 
                     <div className="pt-4 border-t border-slate-700">
-                        <p className="text-slate-400 mb-3 text-sm font-bold uppercase">Alterar Status</p>
+                        <p className="text-slate-400 mb-3 text-sm font-bold uppercase">Status Geral</p>
                         <div className="flex flex-wrap gap-2">
                         <button 
-                            onClick={() => handleStatusChange(ReservationStatus.CHECK_IN)}
-                            className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-medium flex-1"
-                        >
-                            Check-in
-                        </button>
-                        <button 
+                            disabled={!canEdit}
                             onClick={() => handleStatusChange(ReservationStatus.CONFIRMADA)}
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex-1"
+                            className={`px-4 py-2 rounded-lg text-sm font-medium flex-1 ${!canEdit ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-green-600 hover:bg-green-500 text-white'}`}
                         >
                             Confirmar
                         </button>
                         <button 
-                            onClick={() => handleStatusChange(ReservationStatus.NO_SHOW)}
-                            className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-medium flex-1"
+                            disabled={!canEdit}
+                            onClick={() => handleStatusChange(ReservationStatus.PENDENTE)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium flex-1 ${!canEdit ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-yellow-600 hover:bg-yellow-500 text-white'}`}
                         >
-                            No-Show
+                            Pendente
                         </button>
                         <button 
+                            disabled={!canDelete}
                             onClick={() => handleStatusChange(ReservationStatus.CANCELADA)}
-                            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium flex-1"
+                            className={`px-4 py-2 rounded-lg text-sm font-medium flex-1 ${!canDelete ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-red-600 hover:bg-red-500 text-white'}`}
                         >
                             Cancelar
                         </button>
@@ -387,26 +769,78 @@ const Agenda: React.FC = () => {
                 </div>
             ) : (
                 // --- EDIT MODE ---
-                <form onSubmit={handleSaveEdit} className="p-6 space-y-4 animate-fade-in">
+                <form onSubmit={handleSaveEdit} className="p-6 space-y-4 animate-fade-in overflow-y-auto">
                     <div className="grid grid-cols-2 gap-4">
                        <div>
-                          <label className="block text-xs text-slate-400 mb-1">Horário</label>
+                          <label className="block text-xs text-slate-400 mb-1">Data</label>
                           <input 
-                            type="time" step="3600" 
+                            type="date" 
                             className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white"
-                            value={editForm.time}
-                            onChange={e => setEditForm({...editForm, time: e.target.value})}
+                            value={editForm.date}
+                            onChange={e => setEditForm({...editForm, date: e.target.value})}
                           />
                        </div>
                        <div>
-                          <label className="block text-xs text-slate-400 mb-1">Tipo</label>
-                          <select
-                             className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white"
-                             value={editForm.eventType}
-                             onChange={e => setEditForm({...editForm, eventType: e.target.value as EventType})}
-                          >
-                             {Object.values(EventType).map(t => <option key={t} value={t}>{t}</option>)}
-                          </select>
+                          <label className="block text-xs text-slate-400 mb-1">Duração Total</label>
+                          <div className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white font-bold text-neon-blue">
+                              {selectedEditTimes.length} hora(s) selecionada(s)
+                          </div>
+                       </div>
+                       
+                       <div className="col-span-2">
+                           <label className="block text-xs text-slate-400 mb-2">Horário (Multi-seleção)</label>
+                           {calculatingSlots ? (
+                               <div className="flex items-center gap-2 text-slate-400 text-sm"><Loader2 className="animate-spin" size={16}/> Calculando disponibilidade...</div>
+                           ) : (
+                               <div className="grid grid-cols-4 sm:grid-cols-5 lg:grid-cols-6 gap-2 max-h-40 overflow-y-auto pr-1">
+                                   {availableSlots.length === 0 ? (
+                                       <div className="col-span-6 text-center text-slate-500 text-xs italic">
+                                           Fechado ou sem horários configurados para este dia.
+                                       </div>
+                                   ) : availableSlots.map((slot) => {
+                                       const isSelected = selectedEditTimes.includes(slot.time);
+                                       return (
+                                           <button
+                                               key={slot.time}
+                                               type="button"
+                                               disabled={!slot.available && !isSelected}
+                                               onClick={() => toggleEditTime(slot.time)}
+                                               className={`
+                                                   px-2 py-2 rounded text-xs font-bold border transition flex flex-col items-center justify-center
+                                                   ${isSelected
+                                                       ? 'bg-neon-blue text-white border-neon-blue ring-2 ring-neon-blue/30 shadow-[0_0_10px_rgba(59,130,246,0.5)]'
+                                                       : !slot.available
+                                                           ? 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
+                                                           : 'bg-slate-800 text-slate-300 border-slate-600 hover:bg-slate-700'
+                                                   }
+                                               `}
+                                           >
+                                               <span>{slot.label}</span>
+                                               {(!slot.available && !isSelected) ? (
+                                                    <span className="text-[8px] text-red-500 font-bold uppercase mt-1">
+                                                        {slot.isPast ? 'Encerrado' : 'Esgotado'}
+                                                    </span>
+                                               ) : (
+                                                    <span className="text-[8px] font-normal text-slate-400 mt-0.5">Vagas: {slot.left}</span>
+                                               )}
+                                           </button>
+                                       );
+                                   })}
+                               </div>
+                           )}
+                           <p className="text-[10px] text-slate-500 mt-1 italic">* Selecione múltiplos horários para estender a duração.</p>
+                       </div>
+
+                       <div>
+                          <label className="block text-xs text-slate-400 mb-1">Pistas (Slots)</label>
+                          <input 
+                            type="number" 
+                            min="1"
+                            max="20"
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white font-bold text-neon-orange"
+                            value={editForm.laneCount}
+                            onChange={e => setEditForm({...editForm, laneCount: parseInt(e.target.value)})}
+                          />
                        </div>
                        <div>
                           <label className="block text-xs text-slate-400 mb-1">Pessoas</label>
@@ -417,14 +851,15 @@ const Agenda: React.FC = () => {
                             onChange={e => setEditForm({...editForm, peopleCount: parseInt(e.target.value)})}
                           />
                        </div>
-                       <div>
-                          <label className="block text-xs text-slate-400 mb-1">Pistas</label>
-                          <input 
-                            type="number" 
-                            className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white"
-                            value={editForm.laneCount}
-                            onChange={e => setEditForm({...editForm, laneCount: parseInt(e.target.value)})}
-                          />
+                       <div className="col-span-2">
+                          <label className="block text-xs text-slate-400 mb-1">Tipo de Evento</label>
+                          <select
+                             className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white"
+                             value={editForm.eventType}
+                             onChange={e => setEditForm({...editForm, eventType: e.target.value as EventType})}
+                          >
+                             {Object.values(EventType).map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
                        </div>
                        <div className="col-span-2">
                           <label className="block text-xs text-slate-400 mb-1">Observações</label>
@@ -437,8 +872,12 @@ const Agenda: React.FC = () => {
                     </div>
                     <div className="flex gap-3 pt-2">
                        <button type="button" onClick={() => setIsEditMode(false)} className="flex-1 py-3 bg-slate-700 text-white rounded-lg">Cancelar</button>
-                       <button type="submit" className="flex-1 py-3 bg-neon-blue hover:bg-blue-500 text-white rounded-lg font-bold flex justify-center items-center gap-2">
-                          <Save size={18} /> Salvar
+                       <button 
+                         type="submit" 
+                         disabled={loading || selectedEditTimes.length === 0}
+                         className="flex-1 py-3 bg-neon-blue hover:bg-blue-500 text-white rounded-lg font-bold flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                       >
+                          {loading ? <Loader2 className="animate-spin" /> : <><Save size={18} /> Salvar Alterações</>}
                        </button>
                     </div>
                 </form>

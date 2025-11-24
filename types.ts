@@ -1,7 +1,8 @@
 
+
 export enum UserRole {
   ADMIN = 'ADMIN',
-  GESTOR = 'GESTOR',
+  GESTOR = 'GESTOR', // Mantemos o ID interno GESTOR, mas na UI será "Usuário"
   COMUM = 'COMUM'
 }
 
@@ -40,7 +41,17 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
-  passwordHash: string; // Used for mock auth or custom table auth
+  passwordHash: string;
+  
+  // Novas Permissões Booleanas
+  perm_view_agenda: boolean;
+  perm_view_financial: boolean;
+  perm_view_crm: boolean;
+  perm_create_reservation: boolean;
+  perm_edit_reservation: boolean;
+  perm_delete_reservation: boolean;
+  perm_edit_client: boolean;
+  perm_receive_payment: boolean;
 }
 
 export interface Client {
@@ -51,6 +62,7 @@ export interface Client {
   tags: string[];
   createdAt: string;
   lastContactAt: string;
+  funnelStage?: FunnelStage; 
 }
 
 export interface Guest {
@@ -61,20 +73,22 @@ export interface Guest {
 export interface Reservation {
   id: string;
   clientId: string;
-  clientName: string; // Denormalized for easier UI
-  date: string; // YYYY-MM-DD
-  time: string; // HH:00
+  clientName: string; 
+  date: string; 
+  time: string; 
   peopleCount: number;
   laneCount: number;
-  duration: number; // in hours
-  totalValue: number; // in currency units
+  duration: number; 
+  totalValue: number; 
   eventType: EventType;
   observations?: string;
   status: ReservationStatus;
   paymentStatus: PaymentStatus;
   createdAt: string;
-  lanes?: number[]; // e.g., [1, 2]
+  lanes?: number[]; 
   guests?: Guest[];
+  checkedInIds?: string[]; 
+  noShowIds?: string[]; 
 }
 
 export interface FunnelCard {
@@ -95,22 +109,25 @@ export interface Interaction {
   note: string;
 }
 
+export interface DayConfig {
+  isOpen: boolean;
+  start: number; 
+  end: number;   
+}
+
 export interface AppSettings {
   establishmentName: string;
   address: string;
   phone: string;
   whatsappLink: string;
-  activeLanes: number; // 1 to 6
-  // Calendar Integration
-  googleCalendarEnabled: boolean;
-  calendarId: string;
-  // Payment Integration
+  logoUrl?: string; 
+  activeLanes: number; 
+  weekdayPrice: number; 
+  weekendPrice: number; 
   onlinePaymentEnabled: boolean;
   mercadopagoPublicKey?: string;
   mercadopagoAccessToken?: string;
-  // Business Hours Config
-  weekDayStart: number; // e.g. 18
-  weekDayEnd: number;   // e.g. 0 (midnight) or 24
-  weekendStart: number; // e.g. 17
-  weekendEnd: number;   // e.g. 0
+  mercadopagoClientId?: string;     
+  mercadopagoClientSecret?: string; 
+  businessHours: DayConfig[];
 }

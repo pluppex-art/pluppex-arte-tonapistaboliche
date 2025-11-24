@@ -9,18 +9,20 @@ const Funnel: React.FC = () => {
   const [cards, setCards] = useState<FunnelCard[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const fetchCards = async () => {
+    setLoading(true);
+    const data = await db.funnel.getAll();
+    setCards(data);
+    setLoading(false);
+  };
+
   useEffect(() => {
-    const fetch = async () => {
-        setLoading(true);
-        const data = await db.funnel.getAll();
-        setCards(data);
-        setLoading(false);
-    };
-    fetch();
+    fetchCards();
   }, []);
 
   const getCardsByStage = (stage: FunnelStage) => cards.filter(c => c.stage === stage);
 
+  // We use the Card ID (which is mapped to Client ID in mockBackend) to identify the item
   const handleDragStart = (e: React.DragEvent, cardId: string) => {
     e.dataTransfer.setData('cardId', cardId);
   };
@@ -28,12 +30,16 @@ const Funnel: React.FC = () => {
   const handleDrop = async (e: React.DragEvent, stage: FunnelStage) => {
     e.preventDefault();
     const cardId = e.dataTransfer.getData('cardId');
-    const updatedCards = cards.map(c => {
+    
+    // Optimistic UI Update
+    setCards(prev => prev.map(c => {
       if (c.id === cardId) return { ...c, stage };
       return c;
-    });
-    setCards(updatedCards); // Optimistic UI
-    await db.funnel.update(updatedCards);
+    }));
+
+    // Actual DB Update (Update Client Tag)
+    // Note: cardId in our new mapping IS the clientId
+    await db.clients.updateStage(cardId, stage);
   };
 
   const handleDragOver = (e: React.DragEvent) => e.preventDefault();
@@ -83,16 +89,11 @@ const Funnel: React.FC = () => {
                         <GripVertical className="text-slate-500 opacity-0 group-hover:opacity-100 transition" size={16} />
                         </div>
                         <div className="text-xs text-slate-300 mb-2 bg-slate-800 inline-block px-2 py-1 rounded">
-                        {card.eventType}
+                        {card.eventType || 'Geral'}
                         </div>
-                        {card.desiredDate && (
-                        <p className="text-xs text-slate-400 flex items-center gap-1">
-                            📅 {new Date(card.desiredDate).toLocaleDateString('pt-BR')}
-                        </p>
-                        )}
                         {card.notes && (
                         <p className="text-xs text-slate-500 mt-2 border-t border-slate-600 pt-2 line-clamp-2">
-                            "{card.notes}"
+                            {card.notes}
                         </p>
                         )}
                     </div>
