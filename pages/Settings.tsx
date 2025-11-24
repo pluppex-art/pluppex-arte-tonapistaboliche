@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { db } from '../services/mockBackend';
 import { AppSettings, UserRole, User, DayConfig } from '../types';
@@ -398,7 +399,7 @@ const Settings: React.FC = () => {
                                                 </select>
                                                 <span className="text-slate-500 font-bold">-</span>
                                                 <select value={h.end} onChange={e => updateDayConfig(i, 'end', parseInt(e.target.value))} className="bg-slate-800 border-slate-600 text-white rounded p-1.5 text-sm focus:border-neon-blue outline-none min-w-[70px]">
-                                                    <option value={0}>00:00 (Meia-noite)</option>
+                                                    <option value={0}>00:00</option>
                                                     {hoursOptions.filter(o=>o>0).map(o => <option key={o} value={o}>{o}:00</option>)}
                                                 </select>
                                             </div>
