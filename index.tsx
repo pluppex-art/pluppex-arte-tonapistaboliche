@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import './index.css'; // Assuming minimal reset if needed, though Tailwind handles mostly
+// O arquivo index.css foi removido pois estamos usando Tailwind via CDN e estilos no index.html
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
