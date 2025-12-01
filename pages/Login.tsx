@@ -1,6 +1,5 @@
 
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { db } from '../services/mockBackend';
 import { UserRole } from '../types';
@@ -12,7 +11,26 @@ const Login: React.FC = () => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [imgError, setImgError] = useState(false);
+  
+  // State for dynamic branding
+  const [logoUrl, setLogoUrl] = useState('');
+  const [establishmentName, setEstablishmentName] = useState('TÔ NA PISTA');
+  
   const navigate = useNavigate();
+
+  // Fetch settings on mount
+  useEffect(() => {
+    const fetchSettings = async () => {
+        try {
+            const s = await db.settings.get();
+            if (s.logoUrl) setLogoUrl(s.logoUrl);
+            if (s.establishmentName) setEstablishmentName(s.establishmentName);
+        } catch (e) {
+            console.error("Erro ao carregar configurações de login:", e);
+        }
+    };
+    fetchSettings();
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,14 +72,14 @@ const Login: React.FC = () => {
         <div className="text-center mb-8 flex flex-col items-center min-h-[120px] justify-center">
           {!imgError ? (
              <img 
-               src="/logo.png" 
-               alt="Tô Na Pista" 
+               src={logoUrl || "/logo.png"} 
+               alt={establishmentName} 
                className="h-32 w-auto mb-4 object-contain drop-shadow-[0_0_15px_rgba(249,115,22,0.5)]" 
                onError={() => setImgError(true)}
              />
            ) : (
              <div className="mb-6">
-               <h1 className="text-4xl font-bold text-neon-orange font-sans tracking-tighter">TÔ NA PISTA</h1>
+               <h1 className="text-3xl font-bold text-neon-orange font-sans tracking-tighter uppercase leading-none">{establishmentName}</h1>
              </div>
            )}
           <p className="text-slate-400 text-sm">Sistema de Gestão e Reservas</p>
