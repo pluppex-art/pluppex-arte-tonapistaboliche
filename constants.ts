@@ -1,3 +1,4 @@
+
 import { EventType, FunnelStage, ReservationStatus, UserRole, AppSettings, User } from './types';
 
 export const MOCK_DELAY = 500;
@@ -51,24 +52,8 @@ export const PERMISSION_KEYS: { key: keyof User; label: string }[] = [
   { key: 'perm_receive_payment', label: 'Receber Pagamentos (Checkout)' },
 ];
 
-export const SEED_USERS: User[] = [
-  {
-    id: 'u1',
-    name: 'Admin Master',
-    email: 'admin@tonapista.com',
-    role: UserRole.ADMIN,
-    passwordHash: '123456',
-    // Admin tem tudo true por padrão na lógica do App, mas aqui preenchemos
-    perm_view_agenda: true,
-    perm_view_financial: true,
-    perm_view_crm: true,
-    perm_create_reservation: true,
-    perm_edit_reservation: true,
-    perm_delete_reservation: true,
-    perm_edit_client: true,
-    perm_receive_payment: true
-  }
-];
+// Lista VAZIA para forçar o uso do Banco de Dados
+export const SEED_USERS: User[] = [];
 
 export const FIRST_NAMES = [];
 export const LAST_NAMES = [];

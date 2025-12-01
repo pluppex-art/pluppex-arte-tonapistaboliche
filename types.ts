@@ -59,10 +59,22 @@ export interface Client {
   name: string;
   phone: string;
   email?: string;
+  password?: string; // Campo para login do cliente
   tags: string[];
   createdAt: string;
   lastContactAt: string;
   funnelStage?: FunnelStage; 
+  // Fidelidade
+  loyaltyBalance?: number;
+}
+
+export interface LoyaltyTransaction {
+  id: string;
+  clientId: string;
+  amount: number;
+  description: string;
+  createdAt: string;
+  reservationId?: string;
 }
 
 export interface Guest {

@@ -21,9 +21,16 @@ const Settings: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
+  // Current User from localStorage
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
   const [showUserModal, setShowUserModal] = useState(false);
   const [isEditingUser, setIsEditingUser] = useState(false);
   
+  // Deletion State
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // Estado do formulário de usuário com propriedades explícitas
   const [userForm, setUserForm] = useState<Partial<User>>({
     id: '',
@@ -48,6 +55,10 @@ const Settings: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
+      const stored = localStorage.getItem('tonapista_auth');
+      if (stored) setCurrentUser(JSON.parse(stored));
+
+      setUsers([]); // Clear local state to force refresh
       const s = await db.settings.get();
       const u = await db.users.getAll();
       setSettings(s);
@@ -203,20 +214,38 @@ const Settings: React.FC = () => {
             await db.users.create(payload);
         }
         
+        // REFRESH LIST FROM DB
         setUsers(await db.users.getAll());
         setShowUserModal(false);
         alert(isEditingUser ? 'Usuário atualizado!' : 'Usuário criado!');
-    } catch (e) {
+    } catch (e: any) {
         console.error(e);
-        alert("Erro ao salvar usuário.");
+        alert(`Erro ao salvar usuário: ${e.message || 'Erro desconhecido'}`);
     }
   };
 
-  const handleDeleteUser = async (id: string) => {
-    if(window.confirm('Tem certeza que deseja remover este usuário?')) {
-      await db.users.delete(id);
-      setUsers(await db.users.getAll());
+  const handleRequestDelete = (user: User) => {
+    if (user.id === currentUser?.id) {
+        alert("Você não pode excluir seu próprio usuário.");
+        return;
     }
+    setUserToDelete(user);
+  };
+
+  const confirmDeleteUser = async () => {
+      if (!userToDelete) return;
+      setIsDeleting(true);
+      try {
+          await db.users.delete(userToDelete.id);
+          const updatedList = await db.users.getAll();
+          setUsers(updatedList);
+          setUserToDelete(null);
+      } catch (e: any) {
+          console.error(e);
+          alert(`Erro ao excluir: ${e.message || 'Erro de conexão'}`);
+      } finally {
+          setIsDeleting(false);
+      }
   };
 
   const togglePermission = (key: keyof User) => {
@@ -509,7 +538,7 @@ const Settings: React.FC = () => {
                        <td className="p-3 text-right">
                          <div className="flex justify-end gap-2">
                             <button onClick={() => openEditUser(user)} className="p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition"><Pencil size={14} /></button>
-                            <button onClick={() => handleDeleteUser(user.id)} className="p-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/20 rounded transition"><Trash2 size={14} /></button>
+                            <button onClick={() => handleRequestDelete(user)} className="p-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/20 rounded transition"><Trash2 size={14} /></button>
                          </div>
                        </td>
                      </tr>
@@ -601,6 +630,38 @@ const Settings: React.FC = () => {
                </div>
              </form>
           </div>
+        </div>
+      )}
+
+      {/* Confirmation Deletion Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <div className="bg-slate-800 border border-slate-600 w-full max-w-sm rounded-xl shadow-2xl animate-scale-in p-6">
+                <div className="flex flex-col items-center text-center mb-6">
+                    <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-4">
+                        <AlertTriangle size={32} className="text-red-500"/>
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-2">Excluir Usuário?</h3>
+                    <p className="text-slate-400 text-sm">
+                        Tem certeza que deseja remover <strong>{userToDelete.name}</strong>? Esta ação não pode ser desfeita.
+                    </p>
+                </div>
+                <div className="flex gap-3">
+                    <button 
+                        onClick={() => setUserToDelete(null)}
+                        className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition font-medium"
+                    >
+                        Cancelar
+                    </button>
+                    <button 
+                        onClick={confirmDeleteUser}
+                        disabled={isDeleting}
+                        className="flex-1 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition font-bold flex items-center justify-center gap-2"
+                    >
+                        {isDeleting ? <Loader2 className="animate-spin" size={18}/> : 'Sim, Excluir'}
+                    </button>
+                </div>
+            </div>
         </div>
       )}
     </div>

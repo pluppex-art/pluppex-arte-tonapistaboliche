@@ -1,72 +1,64 @@
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { db, cleanPhone } from '../services/mockBackend';
+import { db } from '../services/mockBackend';
 import { Integrations } from '../services/integrations';
-import { EventType, AppSettings, ReservationStatus, Guest, User, PaymentStatus, Reservation, FunnelStage } from '../types';
+import { useApp } from '../contexts/AppContext'; // Context
+import { generateDailySlots, checkHourCapacity } from '../utils/availability'; // Utils
+import { EventType, ReservationStatus, PaymentStatus, Reservation, FunnelStage } from '../types';
 import { EVENT_TYPES, INITIAL_SETTINGS } from '../constants';
 import { CheckCircle, Calendar as CalendarIcon, Clock, Users, ChevronRight, DollarSign, ChevronLeft, Lock, LayoutDashboard, Loader2, UserPlus, Mail, Phone, User as UserIcon, AlertCircle, XCircle, ShieldCheck, CreditCard, ArrowRight, Cake, Utensils } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 
-// Adicionado passo extra "Pagamento"
 const steps = ['Data', 'Configuração & Horário', 'Seus Dados', 'Resumo', 'Pagamento'];
 
 const PublicBooking: React.FC = () => {
   const navigate = useNavigate();
+  const { settings, user: currentUser, loading: appLoading } = useApp(); // Use Context
+  
   const [currentStep, setCurrentStep] = useState(0);
-  const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
   const [imgError, setImgError] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  
   const [existingReservations, setExistingReservations] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isDataLoading, setIsDataLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   // Validation State
   const [errors, setErrors] = useState<Record<string, boolean>>({});
 
-  // Draft State - Store created IDs to pass to checkout
+  // Draft State
   const [createdReservationIds, setCreatedReservationIds] = useState<string[]>([]);
-  const [clientId, setClientId] = useState<string>(''); // Armazena ID do cliente criado/encontrado
+  const [clientId, setClientId] = useState<string>('');
 
   // Form State
   const [selectedDate, setSelectedDate] = useState('');
-  
-  // CHANGED: Multi-select support
   const [selectedTimes, setSelectedTimes] = useState<string[]>([]);
   
-  // New Form Data Structure
   const [formData, setFormData] = useState({
     people: 6, 
     lanes: 1,
     type: EventType.JOGO_NORMAL,
     obs: '',
-    
-    // Table Reservation Data
     wantsTable: false,
     birthdayName: '',
     tableSeatCount: 0,
-
-    // Main Responsible
     name: '',
     whatsapp: '',
     email: '',
-
-    // Second Responsible
     hasSecondResponsible: false,
     secondName: '',
     secondWhatsapp: '',
     secondEmail: ''
   });
 
-  // Calendar View State
   const [viewDate, setViewDate] = useState(new Date());
 
-  // Helper to determine price based on date (Dynamic Price from Settings)
+  // Dynamic Price from Context Settings
   const getPricePerHour = () => {
       if (!selectedDate || !settings) return INITIAL_SETTINGS.weekdayPrice;
       const [y, m, d] = selectedDate.split('-').map(Number);
       const date = new Date(y, m - 1, d);
       const day = date.getDay();
-      // Sexta (5), Sábado (6), Domingo (0) -> Weekend Price
       if (day === 0 || day === 5 || day === 6) {
           return settings.weekendPrice;
       }
@@ -75,28 +67,21 @@ const PublicBooking: React.FC = () => {
 
   const currentPrice = getPricePerHour();
   const totalDuration = selectedTimes.length;
-  const totalValue = currentPrice * formData.lanes * (totalDuration || 0); // Handle 0 duration safely
+  const totalValue = currentPrice * formData.lanes * (totalDuration || 0);
 
+  // Load Reservations only
   useEffect(() => {
     const fetchData = async () => {
-        setIsLoading(true);
-        const s = await db.settings.get();
-        setSettings(s);
-        
-        // Fetch reservations to calculate availability
-        const all = await db.reservations.getAll();
-        setExistingReservations(all);
-
-        const storedUser = localStorage.getItem('tonapista_auth');
-        if (storedUser) {
-            try { setCurrentUser(JSON.parse(storedUser)); } catch (e) {}
-        }
-        setIsLoading(false);
+        setIsDataLoading(true);
+        try {
+            const all = await db.reservations.getAll();
+            setExistingReservations(all);
+        } catch (e) { console.error(e); }
+        setIsDataLoading(false);
     };
     fetchData();
   }, []);
 
-  // Format Phone Mask: (XX) XXXXX-XXXX
   const formatPhone = (value: string) => {
     const numbers = value.replace(/\D/g, '');
     if (numbers.length <= 2) return numbers;
@@ -107,7 +92,6 @@ const PublicBooking: React.FC = () => {
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>, field: 'whatsapp' | 'secondWhatsapp') => {
       const formatted = formatPhone(e.target.value);
       setFormData(prev => ({ ...prev, [field]: formatted }));
-      // Limpa erro ao digitar
       if (errors[field]) setErrors(prev => ({ ...prev, [field]: false }));
   };
 
@@ -116,10 +100,7 @@ const PublicBooking: React.FC = () => {
       if (errors[field]) setErrors(prev => ({ ...prev, [field]: false }));
   };
 
-  const isValidEmail = (email: string) => {
-      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  };
-
+  const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const isValidPhone = (phone: string) => {
       const clean = phone.replace(/\D/g, '');
       return clean.length >= 10 && clean.length <= 11;
@@ -146,9 +127,7 @@ const PublicBooking: React.FC = () => {
 
       if (currentStep === 2) { // Dados
           if (!formData.name.trim()) newErrors.name = true;
-          
           if (!formData.email.trim() || !isValidEmail(formData.email)) newErrors.email = true;
-          
           if (!formData.whatsapp.trim() || !isValidPhone(formData.whatsapp)) newErrors.whatsapp = true;
       }
 
@@ -161,30 +140,23 @@ const PublicBooking: React.FC = () => {
     if (!validateStep()) return;
 
     if (currentStep === 1) {
-        // Validação passou, avança
         setCurrentStep(c => c + 1);
-
     } else if (currentStep === 2) {
-        // --- STEP 2 to 3: SAVE LEAD ---
         setIsSaving(true);
         try {
-            // Check if client exists
             let client = await db.clients.getByPhone(formData.whatsapp);
-            
             if (!client) {
-                // Create new Lead
                 client = await db.clients.create({
                     id: uuidv4(),
                     name: formData.name,
                     phone: formData.whatsapp,
                     email: formData.email,
-                    tags: ['Lead'], // Tagging as Lead explicitly
+                    tags: ['Lead'], 
                     createdAt: new Date().toISOString(),
                     lastContactAt: new Date().toISOString(),
                     funnelStage: FunnelStage.NOVO
                 });
             } else {
-                // Update existing client data
                 await db.clients.update({
                     ...client,
                     name: formData.name,
@@ -201,7 +173,6 @@ const PublicBooking: React.FC = () => {
             setIsSaving(false);
         }
     } else if (currentStep === 3) {
-        // --- STEP 3 to 4: CREATE PENDING RESERVATION ---
         await createPendingReservations();
     } else if (currentStep < steps.length - 1) {
         setCurrentStep(c => c + 1);
@@ -217,14 +188,9 @@ const PublicBooking: React.FC = () => {
     const day = date.getDay();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
-    // Disable past dates
     if (date < today) return false;
-    
-    // Check if open in settings (0=Sun, 6=Sat)
     const dayConfig = settings.businessHours[day];
     if (!dayConfig || !dayConfig.isOpen) return false;
-    
     return true;
   };
 
@@ -237,40 +203,24 @@ const PublicBooking: React.FC = () => {
   const renderCalendar = () => {
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
-    
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstDay = new Date(year, month, 1).getDay(); // 0 = Sunday
-    
+    const firstDay = new Date(year, month, 1).getDay();
     const days = [];
     const weekDays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
-    // Header
     const header = (
       <div className="grid grid-cols-7 mb-2">
         {weekDays.map(d => (
-          <div key={d} className="text-center text-sm font-bold text-slate-500 py-2">
-            {d}
-          </div>
+          <div key={d} className="text-center text-sm font-bold text-slate-500 py-2">{d}</div>
         ))}
       </div>
     );
 
-    // Empty slots
-    for (let i = 0; i < firstDay; i++) {
-      days.push(<div key={`empty-${i}`} className="p-2"></div>);
-    }
+    for (let i = 0; i < firstDay; i++) days.push(<div key={`empty-${i}`} className="p-2"></div>);
 
-    // Days
     for (let d = 1; d <= daysInMonth; d++) {
-      // Explicit local date construction
       const date = new Date(year, month, d);
-      
-      const dateStr = [
-        date.getFullYear(),
-        String(date.getMonth() + 1).padStart(2, '0'),
-        String(date.getDate()).padStart(2, '0')
-      ].join('-');
-
+      const dateStr = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
       const allowed = isDateAllowed(date);
       const isSelected = selectedDate === dateStr;
 
@@ -278,15 +228,8 @@ const PublicBooking: React.FC = () => {
         <button
           key={d}
           disabled={!allowed}
-          onClick={() => { setSelectedDate(dateStr); setSelectedTimes([]); }} // Reset times on date change
-          className={`
-            h-12 rounded-lg flex items-center justify-center font-medium transition-all relative
-            ${isSelected 
-              ? 'bg-neon-orange text-white shadow-[0_0_10px_rgba(249,115,22,0.5)] z-10 scale-110' 
-              : allowed 
-                ? 'bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700' 
-                : 'bg-slate-900/50 text-slate-600 cursor-not-allowed opacity-50'}
-          `}
+          onClick={() => { setSelectedDate(dateStr); setSelectedTimes([]); }}
+          className={`h-12 rounded-lg flex items-center justify-center font-medium transition-all relative ${isSelected ? 'bg-neon-orange text-white shadow-[0_0_10px_rgba(249,115,22,0.5)] z-10 scale-110' : allowed ? 'bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700' : 'bg-slate-900/50 text-slate-600 cursor-not-allowed opacity-50'}`}
         >
           {d}
           {allowed && !isSelected && <span className="absolute bottom-1 w-1 h-1 bg-neon-blue rounded-full opacity-50"></span>}
@@ -297,20 +240,12 @@ const PublicBooking: React.FC = () => {
     return (
       <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 max-w-md mx-auto">
         <div className="flex justify-between items-center mb-6">
-          <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white">
-            <ChevronLeft size={20} />
-          </button>
-          <h3 className="text-lg font-bold text-white capitalize">
-            {viewDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-          </h3>
-          <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white">
-            <ChevronRight size={20} />
-          </button>
+          <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white"><ChevronLeft size={20} /></button>
+          <h3 className="text-lg font-bold text-white capitalize">{viewDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>
+          <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white"><ChevronRight size={20} /></button>
         </div>
         {header}
-        <div className="grid grid-cols-7 gap-2">
-          {days}
-        </div>
+        <div className="grid grid-cols-7 gap-2">{days}</div>
         <div className="mt-4 flex justify-center items-center gap-4 text-xs text-slate-500">
            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-slate-800 border border-slate-700 rounded"></div> Disponível</div>
            <div className="flex items-center gap-1"><div className="w-3 h-3 bg-neon-orange rounded"></div> Selecionado</div>
@@ -320,85 +255,8 @@ const PublicBooking: React.FC = () => {
     );
   };
 
-  // --- Step 2: Time Logic (MULTI-SELECT) ---
-  
-  // Calculate availability for a SINGLE hour slot
-  const checkHourAvailability = (hourInt: number) => {
-    if (!selectedDate) return { available: false, left: 0 };
-
-    const dayReservations = existingReservations.filter(r => 
-      r.date === selectedDate && r.status !== ReservationStatus.CANCELADA
-    );
-
-    const maxLanes = settings.activeLanes;
-    let occupied = 0;
-
-    dayReservations.forEach(r => {
-        const rStart = parseInt(r.time.split(':')[0]);
-        const rEnd = rStart + r.duration;
-        // Check if this specific hour falls within any existing reservation
-        if (hourInt >= rStart && hourInt < rEnd) {
-            occupied += r.laneCount;
-        }
-    });
-
-    const left = maxLanes - occupied;
-    // Check against desired lanes for the current booking
-    const available = left >= formData.lanes;
-
-    return { available, left };
-  };
-
-  const generateTimeSlots = () => {
-    if (!selectedDate) return [];
-    const [y, m, d] = selectedDate.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
-    const day = date.getDay();
-    
-    // Get config for specific day
-    const dayConfig = settings.businessHours[day];
-    if (!dayConfig || !dayConfig.isOpen) return [];
-
-    // Logic to verify if is today
-    const now = new Date();
-    const todayStr = [
-        now.getFullYear(),
-        String(now.getMonth() + 1).padStart(2, '0'),
-        String(now.getDate()).padStart(2, '0')
-    ].join('-');
-    
-    const isToday = selectedDate === todayStr;
-    const currentHour = now.getHours();
-
-    let start = dayConfig.start;
-    let end = dayConfig.end;
-    // Handle closing past midnight (e.g. end=0 means 24)
-    if (end === 0) end = 24;
-    // If closes next day (e.g. 2am), treat strictly as hours
-    if (end < start) end += 24; 
-
-    const slots = [];
-    for (let h = start; h < end; h++) {
-      // Normalize hour for display (e.g. 25:00 -> 01:00)
-      const displayHour = h >= 24 ? h - 24 : h;
-      const time = `${displayHour}:00`;
-      
-      const { available, left } = checkHourAvailability(displayHour);
-      
-      // If it's today and the slot hour is less than or equal to current hour, it's past
-      // Logic adjustment for late night hours if checking 'isToday'
-      const isPast = isToday && (h < currentHour || (h === currentHour)); 
-      
-      slots.push({ 
-          time, 
-          label: time, 
-          available: available && !isPast, 
-          left,
-          isPast 
-      });
-    }
-    return slots;
-  };
+  // --- Step 2: Time Logic (Centralized) ---
+  const timeSlots = generateDailySlots(selectedDate, settings, existingReservations);
 
   const toggleTimeSelection = (time: string) => {
       setSelectedTimes(prev => {
@@ -412,19 +270,11 @@ const PublicBooking: React.FC = () => {
 
   const handlePeopleChange = (num: number) => {
     const suggestedLanes = Math.ceil(num / 6);
-    setFormData(prev => ({ 
-        ...prev, 
-        people: num, 
-        lanes: suggestedLanes,
-    }));
+    setFormData(prev => ({ ...prev, people: num, lanes: suggestedLanes }));
   };
 
-  // Helper to Group Contiguous Times for Reservation Creation
-  // e.g. ["18:00", "19:00", "22:00"] => [{time: "18:00", duration: 2}, {time: "22:00", duration: 1}]
   const getReservationBlocks = () => {
     if (selectedTimes.length === 0) return [];
-
-    // Fix parsing for past-midnight hours if needed, but for simplicity we sort strictly by value
     const sortedHours = selectedTimes.map(t => parseInt(t.split(':')[0])).sort((a,b) => a - b);
     const blocks: { time: string, duration: number }[] = [];
     
@@ -432,7 +282,6 @@ const PublicBooking: React.FC = () => {
     let currentDuration = 1;
 
     for (let i = 1; i < sortedHours.length; i++) {
-        // Handle wrap around if necessary, but typically simple linear check
         if (sortedHours[i] === sortedHours[i-1] + 1) {
             currentDuration++;
         } else {
@@ -445,10 +294,9 @@ const PublicBooking: React.FC = () => {
     return blocks;
   };
 
-  // --- Logic to Create PENDING Booking (Step 3 -> 4) ---
+  // --- Logic to Create PENDING Booking ---
   const createPendingReservations = async () => {
       if (createdReservationIds.length > 0) {
-          // Já criadas, apenas avança
           setCurrentStep(4);
           return;
       }
@@ -456,24 +304,16 @@ const PublicBooking: React.FC = () => {
       setIsSaving(true);
       try {
           const blocks = getReservationBlocks();
-          
-          // Safety Check: Check availability one last time
+          // Re-check capacity for safety using Utility
           const allRes = await db.reservations.getAll();
-          const dayRes = allRes.filter(r => r.date === selectedDate && r.status !== ReservationStatus.CANCELADA);
-          const maxLanes = settings.activeLanes;
           
           for (const block of blocks) {
              const startH = parseInt(block.time.split(':')[0]);
              for(let h=0; h<block.duration; h++) {
                  const checkH = startH + h;
-                 let occupied = 0;
-                 dayRes.forEach(r => {
-                     const rStart = parseInt(r.time.split(':')[0]);
-                     const rEnd = rStart + r.duration;
-                     if(checkH >= rStart && checkH < rEnd) occupied += r.laneCount;
-                 });
-                 if(occupied + formData.lanes > maxLanes) {
-                     alert(`O horário das ${checkH}:00 acabou de ser ocupado. Por favor, revise.`);
+                 const { left } = checkHourCapacity(checkH, selectedDate, allRes, settings.activeLanes);
+                 if(left < formData.lanes) {
+                     alert(`O horário das ${checkH}:00 acabou de ser ocupado.`);
                      setIsSaving(false);
                      return;
                  }
@@ -482,12 +322,9 @@ const PublicBooking: React.FC = () => {
 
           if (!clientId) throw new Error("ID do cliente não encontrado");
 
-          // Create Reservations as PENDING
           const newIds: string[] = [];
-          
           for (const block of blocks) {
              const blockTotalValue = (totalValue / (blocks.reduce((acc, b) => acc + b.duration, 0))) * block.duration;
-             
              const res: Reservation = {
                  id: uuidv4(),
                  clientId: clientId,
@@ -500,29 +337,24 @@ const PublicBooking: React.FC = () => {
                  totalValue: blockTotalValue,
                  eventType: formData.type,
                  observations: formData.obs,
-                 status: ReservationStatus.PENDENTE, // Creates as Pending - Blocks the slot!
+                 status: ReservationStatus.PENDENTE,
                  paymentStatus: PaymentStatus.PENDENTE,
                  createdAt: new Date().toISOString(),
                  guests: [],
                  lanes: [],
                  checkedInIds: [],
                  noShowIds: [],
-                 // New Fields
                  hasTableReservation: formData.wantsTable,
                  birthdayName: formData.wantsTable ? formData.birthdayName : undefined,
                  tableSeatCount: formData.wantsTable ? formData.tableSeatCount : undefined
              };
-
              await db.reservations.create(res);
              newIds.push(res.id);
           }
 
           setCreatedReservationIds(newIds);
-          
-          // Refresh local availability cache
           setExistingReservations(await db.reservations.getAll());
-          
-          setCurrentStep(4); // Advance to Payment Screen
+          setCurrentStep(4);
 
       } catch (e) {
           console.error(e);
@@ -532,34 +364,28 @@ const PublicBooking: React.FC = () => {
       }
   };
 
-  // --- Logic to Process Payment/Redirect ---
   const handlePaymentProcess = async (staffOverride: boolean = false) => {
       setIsSaving(true);
       try {
-          // --- LOGIC: DIRECT REDIRECT ---
           if (settings.onlinePaymentEnabled && !staffOverride) {
               const compositeRes = { 
-                  id: createdReservationIds[0], // Use first ID as ref
+                  id: createdReservationIds[0], 
                   totalValue: totalValue,
                   clientName: formData.name,
                   clientEmail: formData.email
               } as any;
               
               const checkoutUrl = await Integrations.createMercadoPagoPreference(compositeRes, settings);
-              
               if (checkoutUrl) {
                   window.location.href = checkoutUrl;
                   return; 
               } else {
-                  // Fallback se MP falhar
-                  alert("Houve um erro ao conectar com o banco. Redirecionando para método manual.");
+                  alert("Erro no banco. Redirecionando para manual.");
                   navigate('/checkout', { state: { ...formData, date: selectedDate, time: selectedTimes[0], totalValue, reservationBlocks, reservationIds: createdReservationIds } });
               }
           } else {
-             // Modo offline/legado OU Staff Presencial
              navigate('/checkout', { state: { ...formData, date: selectedDate, time: selectedTimes[0], totalValue, reservationBlocks, reservationIds: createdReservationIds } });
           }
-
       } catch (e) {
           console.error(e);
           alert("Erro ao processar pagamento.");
@@ -571,7 +397,7 @@ const PublicBooking: React.FC = () => {
   const formattedDateDisplay = selectedDate ? selectedDate.split('-').reverse().join('/') : '';
   const reservationBlocks = getReservationBlocks();
 
-  if (isLoading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="animate-spin text-neon-orange" size={48} /></div>;
+  if (appLoading || isDataLoading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="animate-spin text-neon-orange" size={48} /></div>;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col">
@@ -580,41 +406,22 @@ const PublicBooking: React.FC = () => {
         <div className="max-w-3xl mx-auto flex justify-between items-center">
           {!imgError ? (
              settings.logoUrl ? (
-                <img 
-                    src={settings.logoUrl}
-                    alt={settings.establishmentName}
-                    className="h-12 md:h-16 object-contain"
-                    onError={() => setImgError(true)}
-                />
+                <img src={settings.logoUrl} alt={settings.establishmentName} className="h-12 md:h-16 object-contain" onError={() => setImgError(true)} />
              ) : (
-                <img 
-                    src="/logo.png" 
-                    alt="Tô Na Pista" 
-                    className="h-12 md:h-16 object-contain" 
-                    onError={() => setImgError(true)}
-                />
+                <img src="/logo.png" alt="Tô Na Pista" className="h-12 md:h-16 object-contain" onError={() => setImgError(true)} />
              )
            ) : (
-             <div className="flex flex-col">
-               <h1 className="text-2xl font-bold text-neon-orange font-sans tracking-tighter leading-none">
-                 {settings.establishmentName}
-               </h1>
-             </div>
+             <h1 className="text-2xl font-bold text-neon-orange font-sans tracking-tighter leading-none">{settings.establishmentName}</h1>
            )}
           
           <div className="flex items-center gap-4">
-            <div className="hidden md:block text-xs font-medium px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400">
-              Agendamento Online
-            </div>
+            <div className="hidden md:block text-xs font-medium px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400">Agendamento Online</div>
             {currentUser ? (
               <Link to="/dashboard" className="flex items-center gap-2 text-neon-blue hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-lg transition font-medium text-sm border border-slate-700">
-                <LayoutDashboard size={16} />
-                <span className="hidden md:inline">Voltar ao Dashboard</span>
+                <LayoutDashboard size={16} /><span className="hidden md:inline">Voltar ao Dashboard</span>
               </Link>
             ) : (
-              <Link to="/login" className="text-slate-600 hover:text-neon-blue transition p-2 rounded-full hover:bg-slate-800" title="Área da Equipe">
-                <Lock size={18} />
-              </Link>
+              <Link to="/login" className="text-slate-600 hover:text-neon-blue transition p-2 rounded-full hover:bg-slate-800" title="Área da Equipe"><Lock size={18} /></Link>
             )}
           </div>
         </div>
@@ -622,50 +429,29 @@ const PublicBooking: React.FC = () => {
 
       <main className="flex-1 p-4 md:p-8">
         <div className="max-w-3xl mx-auto">
-          
-          {/* Progress Bar (Hide on Success) */}
+          {/* Progress Bar */}
           {currentStep < 5 && (
             <div className="mb-8">
                 <div className="flex justify-between mb-2">
                 {steps.map((step, i) => (
-                    <div key={i} className={`text-[10px] md:text-sm font-medium ${i <= currentStep ? 'text-neon-blue' : 'text-slate-600'}`}>
-                    {step}
-                    </div>
+                    <div key={i} className={`text-[10px] md:text-sm font-medium ${i <= currentStep ? 'text-neon-blue' : 'text-slate-600'}`}>{step}</div>
                 ))}
                 </div>
                 <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div 
-                    className="h-full bg-gradient-to-r from-neon-orange to-neon-blue transition-all duration-500 ease-out"
-                    style={{ width: `${((currentStep + 1) / steps.length) * 100}%` }}
-                ></div>
+                <div className="h-full bg-gradient-to-r from-neon-orange to-neon-blue transition-all duration-500 ease-out" style={{ width: `${((currentStep + 1) / steps.length) * 100}%` }}></div>
                 </div>
             </div>
           )}
 
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 md:p-8 shadow-lg min-h-[400px]">
-            
             {/* STEP 1: DATE */}
             {currentStep === 0 && (
               <div className="animate-fade-in">
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <CalendarIcon className="text-neon-orange" /> Escolha a Data
-                </h2>
-                
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><CalendarIcon className="text-neon-orange" /> Escolha a Data</h2>
                 {renderCalendar()}
-
                 <div className="mt-8 flex justify-between items-center">
-                   <div className="text-slate-400">
-                     {selectedDate 
-                       ? `Data escolhida: ${formattedDateDisplay}` 
-                       : 'Selecione uma data no calendário'}
-                   </div>
-                   <button 
-                    disabled={!selectedDate}
-                    onClick={handleNext}
-                    className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-400 transition shadow-lg shadow-blue-500/20"
-                   >
-                     Próximo
-                   </button>
+                   <div className="text-slate-400">{selectedDate ? `Data escolhida: ${formattedDateDisplay}` : 'Selecione uma data no calendário'}</div>
+                   <button disabled={!selectedDate} onClick={handleNext} className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-400 transition shadow-lg">Próximo</button>
                 </div>
               </div>
             )}
@@ -673,174 +459,75 @@ const PublicBooking: React.FC = () => {
             {/* STEP 2: TIME & CONFIGURATION */}
             {currentStep === 1 && (
               <div className="animate-fade-in">
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <Clock className="text-neon-orange" /> Configuração e Horário
-                </h2>
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><Clock className="text-neon-orange" /> Configuração e Horário</h2>
                 
                 <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700 mb-6">
                     <h3 className="text-sm font-bold text-slate-300 uppercase mb-3">Detalhes do Evento</h3>
-                    
-                    {/* CHANGED: Removed Total Hours input from this grid and adjusted columns */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <label className="block text-xs font-medium text-slate-500 mb-1">Nº Pessoas</label>
-                            <input 
-                            type="number"
-                            min={1}
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 focus:border-neon-orange focus:outline-none text-white"
-                            value={formData.people}
-                            onChange={e => handlePeopleChange(parseInt(e.target.value) || 1)}
-                            />
+                            <input type="number" min={1} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 focus:border-neon-orange focus:outline-none text-white" value={formData.people} onChange={e => handlePeopleChange(parseInt(e.target.value) || 1)} />
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-slate-500 mb-1">Nº Pistas</label>
-                            <input 
-                            type="number"
-                            min={1}
-                            max={settings.activeLanes}
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 focus:border-neon-orange focus:outline-none text-white font-bold"
-                            value={formData.lanes}
-                            onChange={e => {
-                                // If current selected times are no longer valid with new lane count, clear them
-                                const count = parseInt(e.target.value) || 1;
-                                setFormData(prev => ({...prev, lanes: count}));
-                                setSelectedTimes([]); // Safety reset
-                            }}
-                            />
+                            <input type="number" min={1} max={settings.activeLanes} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 focus:border-neon-orange focus:outline-none text-white font-bold" value={formData.lanes} onChange={e => { const count = parseInt(e.target.value) || 1; setFormData(prev => ({...prev, lanes: count})); setSelectedTimes([]); }} />
                         </div>
-                        {/* "Total Horas" field removed from here */}
                         <div>
                             <label className="block text-xs font-medium text-slate-500 mb-1">Tipo</label>
-                            <select 
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 focus:border-neon-orange focus:outline-none text-white"
-                            value={formData.type}
-                            onChange={e => {
-                                const newType = e.target.value as EventType;
-                                setFormData(prev => ({
-                                    ...prev, 
-                                    type: newType,
-                                    wantsTable: false, // Reset table check on type change
-                                    birthdayName: '',
-                                    tableSeatCount: 0
-                                }));
-                            }}
-                            >
+                            <select className="w-full bg-slate-800 border border-slate-600 rounded-lg p-2 focus:border-neon-orange focus:outline-none text-white" value={formData.type} onChange={e => { const newType = e.target.value as EventType; setFormData(prev => ({ ...prev, type: newType, wantsTable: false, birthdayName: '', tableSeatCount: 0 })); }}>
                             {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
                     </div>
                     
-                    {/* TABLE RESERVATION LOGIC */}
                     {formData.type !== EventType.JOGO_NORMAL && (
                         <div className="mt-4 pt-4 border-t border-slate-700 animate-fade-in">
                             <label className="flex items-center gap-3 cursor-pointer group mb-4">
                                 <div className={`w-5 h-5 rounded border flex items-center justify-center transition ${formData.wantsTable ? 'bg-neon-blue border-neon-blue' : 'border-slate-600 group-hover:border-slate-400'}`}>
                                     {formData.wantsTable && <CheckCircle size={14} className="text-white" />}
                                 </div>
-                                <input 
-                                    type="checkbox" 
-                                    className="hidden"
-                                    checked={formData.wantsTable}
-                                    onChange={e => handleInputChange('wantsTable', e.target.checked)}
-                                />
-                                <span className="font-bold text-slate-300 group-hover:text-white transition flex items-center gap-2">
-                                    <Utensils size={16}/> Reservar Mesa?
-                                </span>
+                                <input type="checkbox" className="hidden" checked={formData.wantsTable} onChange={e => handleInputChange('wantsTable', e.target.checked)} />
+                                <span className="font-bold text-slate-300 group-hover:text-white transition flex items-center gap-2"><Utensils size={16}/> Reservar Mesa?</span>
                             </label>
 
                             {formData.wantsTable && (
                                 <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-700 grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in">
                                     {formData.type === EventType.ANIVERSARIO && (
                                         <div>
-                                            <label className={`block text-xs font-medium mb-1 ${errors.birthdayName ? 'text-red-500' : 'text-slate-400'}`}>
-                                                Nome do Aniversariante *
-                                            </label>
-                                            <div className="relative">
-                                                <Cake size={14} className="absolute left-3 top-3 text-slate-500"/>
-                                                <input 
-                                                    type="text"
-                                                    className={`w-full bg-slate-800 border rounded-lg p-2 pl-9 focus:outline-none text-white ${errors.birthdayName ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`}
-                                                    value={formData.birthdayName}
-                                                    onChange={e => handleInputChange('birthdayName', e.target.value)}
-                                                    placeholder="Nome do aniversariante"
-                                                />
-                                            </div>
+                                            <label className={`block text-xs font-medium mb-1 ${errors.birthdayName ? 'text-red-500' : 'text-slate-400'}`}>Nome do Aniversariante *</label>
+                                            <div className="relative"><Cake size={14} className="absolute left-3 top-3 text-slate-500"/><input type="text" className={`w-full bg-slate-800 border rounded-lg p-2 pl-9 focus:outline-none text-white ${errors.birthdayName ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`} value={formData.birthdayName} onChange={e => handleInputChange('birthdayName', e.target.value)} placeholder="Nome do aniversariante"/></div>
                                         </div>
                                     )}
                                     <div className={formData.type === EventType.ANIVERSARIO ? "" : "md:col-span-2"}>
-                                        <label className={`block text-xs font-medium mb-1 ${errors.tableSeatCount ? 'text-red-500' : 'text-slate-400'}`}>
-                                            {formData.type === EventType.ANIVERSARIO ? 'Qtd. Convidados (Cadeiras) *' : 'Qtd. Pessoas (Cadeiras) *'}
-                                        </label>
-                                        <input 
-                                            type="number"
-                                            min={1}
-                                            className={`w-full bg-slate-800 border rounded-lg p-2 focus:outline-none text-white ${errors.tableSeatCount ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`}
-                                            value={formData.tableSeatCount}
-                                            onChange={e => handleInputChange('tableSeatCount', parseInt(e.target.value) || 0)}
-                                            placeholder="Ex: 10"
-                                        />
+                                        <label className={`block text-xs font-medium mb-1 ${errors.tableSeatCount ? 'text-red-500' : 'text-slate-400'}`}>{formData.type === EventType.ANIVERSARIO ? 'Qtd. Convidados (Cadeiras) *' : 'Qtd. Pessoas (Cadeiras) *'}</label>
+                                        <input type="number" min={1} className={`w-full bg-slate-800 border rounded-lg p-2 focus:outline-none text-white ${errors.tableSeatCount ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`} value={formData.tableSeatCount} onChange={e => handleInputChange('tableSeatCount', parseInt(e.target.value) || 0)} placeholder="Ex: 10"/>
                                     </div>
                                 </div>
                             )}
                         </div>
                     )}
 
-                    {/* NEW Price & Hours Indicator Section */}
                     <div className="mt-4 pt-4 border-t border-slate-700 flex flex-col md:flex-row justify-between items-end md:items-center gap-2">
-                        <div className="text-sm text-slate-300">
-                            <span className="text-slate-500">Total Horas Selecionadas:</span> <strong className="text-white bg-slate-900 px-2 py-1 rounded border border-slate-700">{totalDuration}h</strong>
-                        </div>
-                        
+                        <div className="text-sm text-slate-300"><span className="text-slate-500">Total Horas Selecionadas:</span> <strong className="text-white bg-slate-900 px-2 py-1 rounded border border-slate-700">{totalDuration}h</strong></div>
                         <div className="text-right">
-                            <div className="text-[10px] sm:text-xs text-slate-500 font-mono mb-1">
-                                {currentPrice.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})} x {formData.lanes} pista(s) x {totalDuration} hora(s)
-                            </div>
-                            <span className="text-sm text-slate-400">
-                                Total Estimado: <strong className="text-xl text-neon-green ml-1">{totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</strong>
-                            </span>
+                            <div className="text-[10px] sm:text-xs text-slate-500 font-mono mb-1">{currentPrice.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})} x {formData.lanes} pista(s) x {totalDuration} hora(s)</div>
+                            <span className="text-sm text-slate-400">Total Estimado: <strong className="text-xl text-neon-green ml-1">{totalValue.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</strong></span>
                         </div>
                     </div>
                 </div>
 
-                <p className="text-slate-400 mb-4">
-                    Selecione os horários desejados. <br/>
-                    <span className="text-xs italic opacity-70">Você pode selecionar horários alternados (ex: 18:00 e 22:00).</span>
-                </p>
+                <p className="text-slate-400 mb-4">Selecione os horários desejados. <br/><span className="text-xs italic opacity-70">Você pode selecionar horários alternados (ex: 18:00 e 22:00).</span></p>
 
                 <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
-                  {generateTimeSlots().length === 0 ? (
-                      <div className="col-span-3 md:col-span-5 text-center text-slate-500 py-4 italic">
-                          Fechado nesta data.
-                      </div>
-                  ) : (
-                    generateTimeSlots().map(({ time, label, available, left, isPast }) => {
+                  {timeSlots.length === 0 ? <div className="col-span-3 md:col-span-5 text-center text-slate-500 py-4 italic">Fechado nesta data.</div> : (
+                    timeSlots.map(({ time, label, available, left, isPast }) => {
                         const isSelected = selectedTimes.includes(time);
+                        const isDisabled = (!available && !isSelected) || (available && left < formData.lanes && !isSelected); // Check lanes fit
                         return (
-                            <button
-                            key={time}
-                            disabled={!available && !isSelected}
-                            onClick={() => toggleTimeSelection(time)}
-                            className={`p-3 rounded-xl border transition-all flex flex-col items-center justify-center relative overflow-hidden ${
-                                isSelected
-                                ? 'bg-neon-blue text-white border-neon-blue shadow-[0_0_15px_rgba(59,130,246,0.5)] transform scale-105 z-10'
-                                : !available
-                                    ? 'border-slate-800 bg-slate-900/50 text-slate-600 cursor-not-allowed opacity-60'
-                                    : 'border-slate-700 bg-slate-800 hover:border-slate-500 text-slate-300 hover:bg-slate-700'
-                            }`}
-                            >
+                            <button key={time} disabled={isDisabled} onClick={() => toggleTimeSelection(time)} className={`p-3 rounded-xl border transition-all flex flex-col items-center justify-center relative overflow-hidden ${isSelected ? 'bg-neon-blue text-white border-neon-blue shadow-[0_0_15px_rgba(59,130,246,0.5)] transform scale-105 z-10' : isDisabled ? 'border-slate-800 bg-slate-900/50 text-slate-600 cursor-not-allowed opacity-60' : 'border-slate-700 bg-slate-800 hover:border-slate-500 text-slate-300 hover:bg-slate-700'}`}>
                             <div className="text-sm md:text-base font-bold">{label}</div>
-                            {!available && !isSelected ? (
-                                <span className="text-[9px] uppercase mt-1 text-red-500/70 font-bold">
-                                    {isPast ? 'Encerrado' : 'Esgotado'}
-                                </span>
-                            ) : (
-                                <div className="flex flex-col items-center">
-                                    {isSelected ? (
-                                        <span className="text-[10px] mt-1 text-white font-bold">Selecionado</span>
-                                    ) : (
-                                        <span className="text-[9px] text-slate-500 mt-1">Restam {left}</span>
-                                    )}
-                                </div>
+                            {isDisabled && !isSelected ? <span className="text-[9px] uppercase mt-1 text-red-500/70 font-bold">{isPast ? 'Encerrado' : 'Esgotado'}</span> : (
+                                <div className="flex flex-col items-center">{isSelected ? <span className="text-[10px] mt-1 text-white font-bold">Selecionado</span> : <span className="text-[9px] text-slate-500 mt-1">Restam {left}</span>}</div>
                             )}
                             </button>
                         );
@@ -849,13 +536,7 @@ const PublicBooking: React.FC = () => {
                 </div>
                  <div className="mt-8 flex justify-between">
                    <button onClick={handleBack} className="text-slate-400 hover:text-white font-medium">Voltar</button>
-                   <button 
-                    disabled={selectedTimes.length === 0}
-                    onClick={handleNext}
-                    className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-400 transition"
-                   >
-                     Próximo
-                   </button>
+                   <button disabled={selectedTimes.length === 0} onClick={handleNext} className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-400 transition">Próximo</button>
                 </div>
               </div>
             )}
@@ -863,273 +544,55 @@ const PublicBooking: React.FC = () => {
             {/* STEP 3: DETAILS */}
             {currentStep === 2 && (
               <div className="animate-fade-in space-y-6">
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <Users className="text-neon-orange" /> Seus Dados
-                </h2>
-                
-                <p className="text-xs text-slate-500 mb-4 bg-slate-800/50 p-2 rounded border border-slate-700">
-                    Os campos marcados com <span className="text-neon-orange font-bold">*</span> são de preenchimento obrigatório.
-                </p>
-
-                {/* Main Contact */}
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><Users className="text-neon-orange" /> Seus Dados</h2>
+                <p className="text-xs text-slate-500 mb-4 bg-slate-800/50 p-2 rounded border border-slate-700">Os campos marcados com <span className="text-neon-orange font-bold">*</span> são de preenchimento obrigatório.</p>
                 <div>
-                    <h3 className="text-sm font-bold text-slate-300 uppercase mb-3 flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-full bg-neon-blue text-white flex items-center justify-center text-xs">1</span> 
-                        Responsável pela reserva
-                    </h3>
+                    <h3 className="text-sm font-bold text-slate-300 uppercase mb-3 flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-neon-blue text-white flex items-center justify-center text-xs">1</span> Responsável pela reserva</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <div>
-                            <label className={`block text-xs font-medium mb-1 ${errors.name ? 'text-red-500' : 'text-slate-500'}`}>
-                                Nome Completo <span className="text-neon-orange">*</span>
-                            </label>
-                            <div className="relative">
-                                <UserIcon size={16} className="absolute left-3 top-3 text-slate-500" />
-                                <input 
-                                type="text"
-                                placeholder="Nome e Sobrenome"
-                                className={`w-full bg-slate-800 border rounded-lg p-3 pl-10 focus:outline-none text-white ${errors.name ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`}
-                                value={formData.name}
-                                onChange={e => handleInputChange('name', e.target.value)}
-                                />
-                            </div>
-                        </div>
-                        <div>
-                            <label className={`block text-xs font-medium mb-1 ${errors.whatsapp ? 'text-red-500' : 'text-slate-500'}`}>
-                                WhatsApp <span className="text-neon-orange">*</span>
-                            </label>
-                            <div className="relative">
-                                <Phone size={16} className="absolute left-3 top-3 text-slate-500" />
-                                <input 
-                                type="tel"
-                                maxLength={15}
-                                placeholder="(00) 00000-0000"
-                                className={`w-full bg-slate-800 border rounded-lg p-3 pl-10 focus:outline-none text-white ${errors.whatsapp ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`}
-                                value={formData.whatsapp}
-                                onChange={e => handlePhoneChange(e, 'whatsapp')}
-                                />
-                            </div>
-                        </div>
-                        <div className="md:col-span-2 lg:col-span-1">
-                            <label className={`block text-xs font-medium mb-1 ${errors.email ? 'text-red-500' : 'text-slate-500'}`}>
-                                E-mail <span className="text-neon-orange">*</span>
-                            </label>
-                            <div className="relative">
-                                <Mail size={16} className="absolute left-3 top-3 text-slate-500" />
-                                <input 
-                                type="email"
-                                placeholder="seu@email.com"
-                                className={`w-full bg-slate-800 border rounded-lg p-3 pl-10 focus:outline-none text-white ${errors.email ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`}
-                                value={formData.email}
-                                onChange={e => handleInputChange('email', e.target.value)}
-                                />
-                            </div>
-                        </div>
+                        <div><label className={`block text-xs font-medium mb-1 ${errors.name ? 'text-red-500' : 'text-slate-500'}`}>Nome Completo <span className="text-neon-orange">*</span></label><div className="relative"><UserIcon size={16} className="absolute left-3 top-3 text-slate-500" /><input type="text" placeholder="Nome e Sobrenome" className={`w-full bg-slate-800 border rounded-lg p-3 pl-10 focus:outline-none text-white ${errors.name ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`} value={formData.name} onChange={e => handleInputChange('name', e.target.value)} /></div></div>
+                        <div><label className={`block text-xs font-medium mb-1 ${errors.whatsapp ? 'text-red-500' : 'text-slate-500'}`}>WhatsApp <span className="text-neon-orange">*</span></label><div className="relative"><Phone size={16} className="absolute left-3 top-3 text-slate-500" /><input type="tel" maxLength={15} placeholder="(00) 00000-0000" className={`w-full bg-slate-800 border rounded-lg p-3 pl-10 focus:outline-none text-white ${errors.whatsapp ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`} value={formData.whatsapp} onChange={e => handlePhoneChange(e, 'whatsapp')} /></div></div>
+                        <div className="md:col-span-2 lg:col-span-1"><label className={`block text-xs font-medium mb-1 ${errors.email ? 'text-red-500' : 'text-slate-500'}`}>E-mail <span className="text-neon-orange">*</span></label><div className="relative"><Mail size={16} className="absolute left-3 top-3 text-slate-500" /><input type="email" placeholder="seu@email.com" className={`w-full bg-slate-800 border rounded-lg p-3 pl-10 focus:outline-none text-white ${errors.email ? 'border-red-500' : 'border-slate-600 focus:border-neon-orange'}`} value={formData.email} onChange={e => handleInputChange('email', e.target.value)} /></div></div>
                     </div>
                 </div>
-
-                {/* Second Responsible Toggle */}
                 <div className="pt-4 border-t border-slate-800">
-                    <label className="flex items-center gap-3 cursor-pointer group">
-                        <div className={`w-6 h-6 rounded border flex items-center justify-center transition ${formData.hasSecondResponsible ? 'bg-neon-blue border-neon-blue' : 'border-slate-600 group-hover:border-slate-400'}`}>
-                            {formData.hasSecondResponsible && <CheckCircle size={16} className="text-white" />}
-                        </div>
-                        <input 
-                            type="checkbox" 
-                            className="hidden"
-                            checked={formData.hasSecondResponsible}
-                            onChange={e => handleInputChange('hasSecondResponsible', e.target.checked)}
-                        />
-                        <span className="font-bold text-slate-300 group-hover:text-white transition">Adicionar Segundo Responsável? <span className="text-xs font-normal text-slate-500">(Opcional)</span></span>
-                    </label>
-
-                    {formData.hasSecondResponsible && (
-                        <div className="mt-4 animate-fade-in p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
-                             <h3 className="text-sm font-bold text-slate-300 uppercase mb-3 flex items-center gap-2">
-                                <span className="w-6 h-6 rounded-full bg-slate-700 text-white flex items-center justify-center text-xs">2</span> 
-                                Segundo Responsável
-                            </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                <div>
-                                    <label className="block text-xs font-medium text-slate-500 mb-1">Nome Completo</label>
-                                    <input 
-                                    type="text"
-                                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none text-white"
-                                    value={formData.secondName}
-                                    onChange={e => handleInputChange('secondName', e.target.value)}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-slate-500 mb-1">WhatsApp</label>
-                                    <input 
-                                    type="tel"
-                                    maxLength={15}
-                                    placeholder="(00) 00000-0000"
-                                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none text-white"
-                                    value={formData.secondWhatsapp}
-                                    onChange={e => handlePhoneChange(e, 'secondWhatsapp')}
-                                    />
-                                </div>
-                                <div className="md:col-span-2 lg:col-span-1">
-                                    <label className="block text-xs font-medium text-slate-500 mb-1">E-mail (Opcional)</label>
-                                    <input 
-                                    type="email"
-                                    className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none text-white"
-                                    value={formData.secondEmail}
-                                    onChange={e => handleInputChange('secondEmail', e.target.value)}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    )}
+                    <label className="flex items-center gap-3 cursor-pointer group"><div className={`w-6 h-6 rounded border flex items-center justify-center transition ${formData.hasSecondResponsible ? 'bg-neon-blue border-neon-blue' : 'border-slate-600 group-hover:border-slate-400'}`}>{formData.hasSecondResponsible && <CheckCircle size={16} className="text-white" />}</div><input type="checkbox" className="hidden" checked={formData.hasSecondResponsible} onChange={e => handleInputChange('hasSecondResponsible', e.target.checked)} /><span className="font-bold text-slate-300 group-hover:text-white transition">Adicionar Segundo Responsável? <span className="text-xs font-normal text-slate-500">(Opcional)</span></span></label>
+                    {formData.hasSecondResponsible && (<div className="mt-4 animate-fade-in p-4 bg-slate-800/30 rounded-lg border border-slate-700/50"><h3 className="text-sm font-bold text-slate-300 uppercase mb-3 flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-slate-700 text-white flex items-center justify-center text-xs">2</span> Segundo Responsável</h3><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"><div><label className="block text-xs font-medium text-slate-500 mb-1">Nome Completo</label><input type="text" className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none text-white" value={formData.secondName} onChange={e => handleInputChange('secondName', e.target.value)} /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">WhatsApp</label><input type="tel" maxLength={15} placeholder="(00) 00000-0000" className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none text-white" value={formData.secondWhatsapp} onChange={e => handlePhoneChange(e, 'secondWhatsapp')} /></div><div className="md:col-span-2 lg:col-span-1"><label className="block text-xs font-medium text-slate-500 mb-1">E-mail (Opcional)</label><input type="email" className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none text-white" value={formData.secondEmail} onChange={e => handleInputChange('secondEmail', e.target.value)} /></div></div></div>)}
                 </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-1">Observações</label>
-                    <textarea 
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none h-20 text-white"
-                      value={formData.obs}
-                      onChange={e => handleInputChange('obs', e.target.value)}
-                    />
-                </div>
-
-                 <div className="mt-8 flex justify-between items-center">
-                   <button onClick={handleBack} className="text-slate-400 hover:text-white font-medium">Voltar</button>
-                   <div className="flex flex-col items-end gap-2">
-                     <button 
-                      disabled={isSaving}
-                      onClick={handleNext}
-                      className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-400 transition flex items-center gap-2"
-                     >
-                       {isSaving ? <Loader2 className="animate-spin" size={20} /> : 'Próximo'}
-                     </button>
-                   </div>
-                </div>
+                <div><label className="block text-sm font-medium text-slate-400 mb-1">Observações</label><textarea className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 focus:border-neon-orange focus:outline-none h-20 text-white" value={formData.obs} onChange={e => handleInputChange('obs', e.target.value)} /></div>
+                 <div className="mt-8 flex justify-between items-center"><button onClick={handleBack} className="text-slate-400 hover:text-white font-medium">Voltar</button><div className="flex flex-col items-end gap-2"><button disabled={isSaving} onClick={handleNext} className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-400 transition flex items-center gap-2">{isSaving ? <Loader2 className="animate-spin" size={20} /> : 'Próximo'}</button></div></div>
               </div>
             )}
 
             {/* STEP 4: SUMMARY */}
             {currentStep === 3 && (
               <div className="animate-fade-in">
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                  <CheckCircle className="text-neon-green" /> Resumo da Reserva
-                </h2>
-
+                <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><CheckCircle className="text-neon-green" /> Resumo da Reserva</h2>
                 <div className="bg-slate-800/50 rounded-xl p-6 space-y-4 border border-slate-700">
-                  <div className="flex justify-between border-b border-slate-700 pb-2">
-                     <span className="text-slate-400">Responsável pela reserva</span>
-                     <div className="text-right">
-                         <span className="font-bold text-white block">{formData.name}</span>
-                         <span className="text-xs text-slate-500 block">{formData.whatsapp} | {formData.email}</span>
-                     </div>
-                  </div>
-                  
-                  <div className="flex justify-between border-b border-slate-700 pb-2">
-                     <span className="text-slate-400">Data</span>
-                     <span className="font-bold text-white">{formattedDateDisplay}</span>
-                  </div>
-                  
-                  {/* Reservation Blocks Summary */}
-                  <div className="border-b border-slate-700 pb-2">
-                      <span className="text-slate-400 block mb-2">Horários Selecionados</span>
-                      <div className="space-y-2">
-                        {reservationBlocks.map((block, idx) => (
-                            <div key={idx} className="flex justify-between items-center bg-slate-900/50 p-2 rounded">
-                                <span className="font-bold text-white">{block.time}</span>
-                                <span className="text-xs text-slate-400">{block.duration} hora(s) de duração</span>
-                            </div>
-                        ))}
-                      </div>
-                  </div>
-
-                   <div className="flex justify-between border-b border-slate-700 pb-2">
-                     <span className="text-slate-400">Detalhes Gerais</span>
-                     <div className="text-right">
-                         <span className="font-bold text-white block">{formData.people} pessoas / {formData.lanes} pista(s) / {totalDuration}h total</span>
-                         <span className="text-xs text-neon-orange font-bold uppercase">{formData.type}</span>
-                         {formData.wantsTable && (
-                             <div className="mt-1 text-xs text-slate-400 flex flex-col items-end">
-                                 <span className="flex items-center gap-1"><Utensils size={10}/> Reserva de Mesa ({formData.tableSeatCount} lug.)</span>
-                                 {formData.birthdayName && <span className="text-neon-blue">Aniv: {formData.birthdayName}</span>}
-                             </div>
-                         )}
-                     </div>
-                  </div>
-                  
-                  <div className="flex justify-between items-center pt-2">
-                     <span className="text-slate-400 flex items-center gap-1"><DollarSign size={16}/> Valor Total</span>
-                     <span className="font-bold text-2xl text-neon-green">
-                        {totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                     </span>
-                  </div>
+                  <div className="flex justify-between border-b border-slate-700 pb-2"><span className="text-slate-400">Responsável</span><div className="text-right"><span className="font-bold text-white block">{formData.name}</span><span className="text-xs text-slate-500 block">{formData.whatsapp}</span></div></div>
+                  <div className="flex justify-between border-b border-slate-700 pb-2"><span className="text-slate-400">Data</span><span className="font-bold text-white">{formattedDateDisplay}</span></div>
+                  <div className="border-b border-slate-700 pb-2"><span className="text-slate-400 block mb-2">Horários</span><div className="space-y-2">{reservationBlocks.map((block, idx) => (<div key={idx} className="flex justify-between items-center bg-slate-900/50 p-2 rounded"><span className="font-bold text-white">{block.time}</span><span className="text-xs text-slate-400">{block.duration} hora(s)</span></div>))}</div></div>
+                   <div className="flex justify-between border-b border-slate-700 pb-2"><span className="text-slate-400">Detalhes</span><div className="text-right"><span className="font-bold text-white block">{formData.people} pessoas / {formData.lanes} pista(s)</span><span className="text-xs text-neon-orange font-bold uppercase">{formData.type}</span></div></div>
+                  <div className="flex justify-between items-center pt-2"><span className="text-slate-400 flex items-center gap-1"><DollarSign size={16}/> Valor Total</span><span className="font-bold text-2xl text-neon-green">{totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span></div>
                 </div>
-
-                 <div className="mt-8 flex justify-between items-center">
-                   <button onClick={handleBack} className="text-slate-400 hover:text-white font-medium">Voltar e Editar</button>
-                   
-                   <button 
-                      onClick={handleNext}
-                      disabled={isSaving}
-                      className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg hover:bg-blue-500 transition flex items-center gap-2"
-                   >
-                      {isSaving ? <Loader2 className="animate-spin" /> : <>Avançar <ChevronRight size={18}/></>}
-                   </button>
-                </div>
+                 <div className="mt-8 flex justify-between items-center"><button onClick={handleBack} className="text-slate-400 hover:text-white font-medium">Voltar e Editar</button><button onClick={handleNext} disabled={isSaving} className="px-8 py-3 bg-neon-blue text-white font-bold rounded-lg hover:bg-blue-500 transition flex items-center gap-2">{isSaving ? <Loader2 className="animate-spin" /> : <>Avançar <ChevronRight size={18}/></>}</button></div>
               </div>
             )}
             
-            {/* STEP 5: PRE-BOOKING & PAYMENT (NOVO PASSO) */}
+            {/* STEP 5: PRE-BOOKING & PAYMENT */}
             {currentStep === 4 && (
                 <div className="animate-fade-in text-center pt-8">
-                     <div className="w-20 h-20 bg-neon-blue/20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(59,130,246,0.3)]">
-                        <Lock size={40} className="text-neon-blue" />
-                     </div>
+                     <div className="w-20 h-20 bg-neon-blue/20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(59,130,246,0.3)]"><Lock size={40} className="text-neon-blue" /></div>
                      <h2 className="text-3xl font-bold text-white mb-4">Pré agendamento realizado</h2>
-                     <p className="text-slate-300 max-w-lg mx-auto mb-8 text-lg">
-                        Seu horário foi reservado temporariamente! <br/>
-                        <span className="text-neon-orange font-bold">Atenção:</span> Para confirmar definitivamente, é necessário efetuar o pagamento antecipado.
-                     </p>
-
-                     <div className="bg-slate-800 p-4 rounded-lg max-w-md mx-auto mb-8 border border-slate-700">
-                        <p className="text-sm text-slate-400 mb-1">Valor Total a Pagar</p>
-                        <p className="text-3xl font-bold text-neon-green">
-                            {totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </p>
-                     </div>
-
+                     <p className="text-slate-300 max-w-lg mx-auto mb-8 text-lg">Seu horário foi reservado temporariamente! <br/><span className="text-neon-orange font-bold">Atenção:</span> Para confirmar definitivamente, é necessário efetuar o pagamento.</p>
+                     <div className="bg-slate-800 p-4 rounded-lg max-w-md mx-auto mb-8 border border-slate-700"><p className="text-sm text-slate-400 mb-1">Valor Total</p><p className="text-3xl font-bold text-neon-green">{totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p></div>
                      <div className="flex flex-col gap-4 max-w-sm mx-auto">
-                        {/* Botão Principal - Mercado Pago */}
-                         <button 
-                            disabled={isSaving}
-                            onClick={() => handlePaymentProcess(false)}
-                            className={`w-full py-4 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-3 transition transform hover:-translate-y-1 bg-gradient-to-r from-neon-green to-emerald-600 hover:shadow-[0_0_20px_rgba(34,197,94,0.4)]`}
-                        >
-                            {isSaving ? (
-                                <><Loader2 className="animate-spin" /> Processando...</>
-                            ) : (
-                                <><ShieldCheck size={24}/> Pagar Agora</>
-                            )}
-                        </button>
-                        
-                        <p className="text-xs text-slate-500 mt-1">
-                            Você será redirecionado para o ambiente seguro do Mercado Pago.
-                        </p>
-
-                        {/* Botão Staff - Aparece se logado */}
-                        {currentUser && (
-                             <button 
-                                disabled={isSaving}
-                                onClick={() => handlePaymentProcess(true)}
-                                className="mt-4 w-full py-3 bg-slate-800 border border-slate-700 text-slate-300 font-bold rounded-lg hover:bg-slate-700 hover:text-white transition flex items-center justify-center gap-2"
-                             >
-                                <CreditCard size={18}/> Pagar no Local (Equipe)
-                             </button>
-                        )}
-
+                         <button disabled={isSaving} onClick={() => handlePaymentProcess(false)} className={`w-full py-4 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-3 transition transform hover:-translate-y-1 bg-gradient-to-r from-neon-green to-emerald-600`}>{isSaving ? <><Loader2 className="animate-spin" /> Processando...</> : <><ShieldCheck size={24}/> Pagar Agora</>}</button>
+                        <p className="text-xs text-slate-500 mt-1">Redirecionamento seguro para Mercado Pago.</p>
+                        {currentUser && (<button disabled={isSaving} onClick={() => handlePaymentProcess(true)} className="mt-4 w-full py-3 bg-slate-800 border border-slate-700 text-slate-300 font-bold rounded-lg hover:bg-slate-700 hover:text-white transition flex items-center justify-center gap-2"><CreditCard size={18}/> Pagar no Local (Equipe)</button>)}
                         <button onClick={handleBack} className="mt-4 text-slate-500 hover:text-white text-sm">Voltar</button>
                      </div>
                 </div>
             )}
-
           </div>
         </div>
       </main>

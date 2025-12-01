@@ -1,6 +1,4 @@
-
-
-import { AppSettings, Client, FunnelCard, Interaction, Reservation, User, ReservationStatus, PaymentStatus, UserRole, FunnelStage } from '../types';
+import { AppSettings, Client, FunnelCard, Interaction, Reservation, User, ReservationStatus, PaymentStatus, UserRole, FunnelStage, LoyaltyTransaction } from '../types';
 import { supabase } from './supabaseClient';
 import { INITIAL_SETTINGS, FUNNEL_STAGES } from '../constants';
 
@@ -38,6 +36,7 @@ export const db = {
           if (data.ativo === false) return { error: 'Conta desativada.' };
 
           const roleNormalized = (data.role || '').toUpperCase() as UserRole;
+          const isAdmin = roleNormalized === UserRole.ADMIN;
 
           return {
             user: {
@@ -46,15 +45,15 @@ export const db = {
               email: data.email,
               role: Object.values(UserRole).includes(roleNormalized) ? roleNormalized : UserRole.COMUM,
               passwordHash: '',
-              // Mapeamento das colunas booleanas
-              perm_view_agenda: data.perm_view_agenda ?? false,
-              perm_view_financial: data.perm_view_financial ?? false,
-              perm_view_crm: data.perm_view_crm ?? false,
-              perm_create_reservation: data.perm_create_reservation ?? false,
-              perm_edit_reservation: data.perm_edit_reservation ?? false,
-              perm_delete_reservation: data.perm_delete_reservation ?? false,
-              perm_edit_client: data.perm_edit_client ?? false,
-              perm_receive_payment: data.perm_receive_payment ?? false
+              // Se for ADMIN, força TRUE no código para segurança
+              perm_view_agenda: isAdmin ? true : (data.perm_view_agenda ?? false),
+              perm_view_financial: isAdmin ? true : (data.perm_view_financial ?? false),
+              perm_view_crm: isAdmin ? true : (data.perm_view_crm ?? false),
+              perm_create_reservation: isAdmin ? true : (data.perm_create_reservation ?? false),
+              perm_edit_reservation: isAdmin ? true : (data.perm_edit_reservation ?? false),
+              perm_delete_reservation: isAdmin ? true : (data.perm_delete_reservation ?? false),
+              perm_edit_client: isAdmin ? true : (data.perm_edit_client ?? false),
+              perm_receive_payment: isAdmin ? true : (data.perm_receive_payment ?? false)
             }
           };
         } else {
@@ -68,31 +67,63 @@ export const db = {
       const { data, error } = await supabase.from('usuarios').select('*');
       if (error) return [];
       
-      return data.map((u: any) => ({
-        id: u.id,
-        name: u.nome || 'Usuário',         
-        email: u.email || '',   
-        role: (u.role || '').toUpperCase() as UserRole, 
+      return data.map((u: any) => {
+        const roleNormalized = (u.role || '').toUpperCase() as UserRole;
+        const isAdmin = roleNormalized === UserRole.ADMIN;
+        
+        return {
+          id: u.id,
+          name: u.nome || 'Usuário',         
+          email: u.email || '',   
+          role: roleNormalized, 
+          passwordHash: '',
+          perm_view_agenda: isAdmin ? true : (u.perm_view_agenda ?? false),
+          perm_view_financial: isAdmin ? true : (u.perm_view_financial ?? false),
+          perm_view_crm: isAdmin ? true : (u.perm_view_crm ?? false),
+          perm_create_reservation: isAdmin ? true : (u.perm_create_reservation ?? false),
+          perm_edit_reservation: isAdmin ? true : (u.perm_edit_reservation ?? false),
+          perm_delete_reservation: isAdmin ? true : (u.perm_delete_reservation ?? false),
+          perm_edit_client: isAdmin ? true : (u.perm_edit_client ?? false),
+          perm_receive_payment: isAdmin ? true : (u.perm_receive_payment ?? false)
+        };
+      });
+    },
+    getById: async (id: string): Promise<User | null> => {
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (error || !data) return null;
+
+      const roleNormalized = (data.role || '').toUpperCase() as UserRole;
+      const isAdmin = roleNormalized === UserRole.ADMIN;
+
+      return {
+        id: data.id,
+        name: data.nome || 'Usuário',
+        email: data.email || '',
+        role: Object.values(UserRole).includes(roleNormalized) ? roleNormalized : UserRole.COMUM,
         passwordHash: '',
-        perm_view_agenda: u.perm_view_agenda ?? false,
-        perm_view_financial: u.perm_view_financial ?? false,
-        perm_view_crm: u.perm_view_crm ?? false,
-        perm_create_reservation: u.perm_create_reservation ?? false,
-        perm_edit_reservation: u.perm_edit_reservation ?? false,
-        perm_delete_reservation: u.perm_delete_reservation ?? false,
-        perm_edit_client: u.perm_edit_client ?? false,
-        perm_receive_payment: u.perm_receive_payment ?? false
-      }));
+        perm_view_agenda: isAdmin ? true : (data.perm_view_agenda ?? false),
+        perm_view_financial: isAdmin ? true : (data.perm_view_financial ?? false),
+        perm_view_crm: isAdmin ? true : (data.perm_view_crm ?? false),
+        perm_create_reservation: isAdmin ? true : (data.perm_create_reservation ?? false),
+        perm_edit_reservation: isAdmin ? true : (data.perm_edit_reservation ?? false),
+        perm_delete_reservation: isAdmin ? true : (data.perm_delete_reservation ?? false),
+        perm_edit_client: isAdmin ? true : (data.perm_edit_client ?? false),
+        perm_receive_payment: isAdmin ? true : (data.perm_receive_payment ?? false)
+      };
     },
     create: async (user: User) => {
-      await supabase.from('usuarios').insert({
+      const { error } = await supabase.from('usuarios').insert({
         id: user.id,
         nome: user.name,
         email: user.email,
         role: user.role,
         senha: user.passwordHash,
         ativo: true,
-        // Colunas
         perm_view_agenda: user.perm_view_agenda,
         perm_view_financial: user.perm_view_financial,
         perm_view_crm: user.perm_view_crm,
@@ -102,13 +133,13 @@ export const db = {
         perm_edit_client: user.perm_edit_client,
         perm_receive_payment: user.perm_receive_payment
       });
+      if (error) throw error;
     },
     update: async (user: User) => {
       const payload: any = {
         nome: user.name,
         email: user.email,
         role: user.role,
-        // Colunas
         perm_view_agenda: user.perm_view_agenda,
         perm_view_financial: user.perm_view_financial,
         perm_view_crm: user.perm_view_crm,
@@ -123,14 +154,103 @@ export const db = {
           payload.senha = user.passwordHash;
       }
 
-      await supabase.from('usuarios').update(payload).eq('id', user.id);
+      const { error } = await supabase.from('usuarios').update(payload).eq('id', user.id);
+      if (error) throw error;
     },
     delete: async (id: string) => {
-      await supabase.from('usuarios').delete().eq('id', id);
+      const { error } = await supabase.from('usuarios').delete().eq('id', id);
+      if (error) {
+        throw new Error(error.message || "Erro ao excluir usuário.");
+      }
     }
   },
   
   clients: {
+    login: async (email: string, password: string): Promise<{ client?: Client; error?: string }> => {
+      try {
+        const { data, error } = await supabase
+          .from('clientes')
+          .select('*')
+          .eq('email', email)
+          .maybeSingle();
+
+        if (error) {
+          return { error: `Erro técnico: ${error.message}` };
+        }
+
+        if (!data) return { error: 'E-mail não encontrado.' };
+
+        // Verifica senha (texto simples por enquanto, ideal migrar para Auth depois)
+        if (data.password === password) {
+           const tags = safeTags(data.tags);
+           return {
+             client: {
+               id: data.client_id,
+               name: data.name,
+               phone: data.phone,
+               email: data.email,
+               tags: tags,
+               createdAt: data.created_at,
+               lastContactAt: data.last_contact_at,
+               funnelStage: data.funnel_stage,
+               loyaltyBalance: data.loyalty_balance || 0
+             }
+           };
+        } else {
+          return { error: 'Senha incorreta.' };
+        }
+      } catch (err) {
+        return { error: 'Erro inesperado.' };
+      }
+    },
+    register: async (client: Client, password: string): Promise<{ client?: Client; error?: string }> => {
+        try {
+            const phoneClean = cleanPhone(client.phone);
+            
+            // Check if exists by phone OR email
+            const { data: existing } = await supabase
+                .from('clientes')
+                .select('*')
+                .or(`phone.eq.${phoneClean},email.eq.${client.email}`)
+                .maybeSingle();
+
+            if (existing) {
+                // If exists but no password, update it
+                if (!existing.password) {
+                    await supabase.from('clientes').update({ password: password }).eq('client_id', existing.client_id);
+                    return { client: { ...client, id: existing.client_id, loyaltyBalance: existing.loyalty_balance } };
+                } else {
+                    return { error: 'Cliente já cadastrado com senha. Faça login.' };
+                }
+            }
+
+            const dbClient = {
+                client_id: client.id, 
+                name: client.name,
+                phone: phoneClean,
+                email: client.email,
+                password: password,
+                tags: ['Novo Cadastro'],
+                last_contact_at: new Date().toISOString(),
+                created_at: new Date().toISOString(),
+                funnel_stage: FunnelStage.NOVO,
+                loyalty_balance: 0
+            };
+
+            const { error } = await supabase.from('clientes').insert(dbClient);
+            
+            if (error) {
+                if (error.message?.includes('column "password"')) {
+                    return { error: "Erro de Configuração: Coluna 'password' não existe no banco. O Admin precisa rodar o SQL de atualização." };
+                }
+                return { error: error.message };
+            }
+
+            return { client };
+        } catch (e: any) {
+            return { error: e.message };
+        }
+    },
     getAll: async (): Promise<Client[]> => {
       const { data, error } = await supabase.from('clientes').select('*');
       if (error) return [];
@@ -148,7 +268,8 @@ export const db = {
           tags: tags,
           createdAt: c.created_at || new Date().toISOString(),
           lastContactAt: c.last_contact_at || new Date().toISOString(),
-          funnelStage: finalStage
+          funnelStage: finalStage,
+          loyaltyBalance: c.loyalty_balance || 0
         };
       });
     },
@@ -176,7 +297,33 @@ export const db = {
         tags: tags,
         createdAt: data.created_at,
         lastContactAt: data.last_contact_at,
-        funnelStage: finalStage
+        funnelStage: finalStage,
+        loyaltyBalance: data.loyalty_balance || 0
+      };
+    },
+    getById: async (id: string): Promise<Client | null> => {
+      const { data, error } = await supabase
+        .from('clientes')
+        .select('*')
+        .eq('client_id', id)
+        .maybeSingle();
+
+      if (error || !data) return null;
+
+      const tags = safeTags(data.tags);
+      const stageFromTag = tags.find((t: string) => FUNNEL_STAGES.includes(t as FunnelStage));
+      const finalStage = (data.funnel_stage as FunnelStage) || (stageFromTag as FunnelStage) || FunnelStage.NOVO;
+
+      return {
+        id: data.client_id, 
+        name: data.name,
+        phone: data.phone,
+        email: data.email,
+        tags: tags,
+        createdAt: data.created_at,
+        lastContactAt: data.last_contact_at,
+        funnelStage: finalStage,
+        loyaltyBalance: data.loyalty_balance || 0
       };
     },
     create: async (client: Client): Promise<Client> => {
@@ -184,7 +331,6 @@ export const db = {
       const phoneClean = cleanPhone(client.phone);
       const initialStage = client.funnelStage || FunnelStage.NOVO;
 
-      // 1. Tenta buscar existente primeiro para evitar conflito de PK no Upsert/Insert
       const { data: existingClient } = await supabase
           .from('clientes')
           .select('*')
@@ -192,7 +338,6 @@ export const db = {
           .maybeSingle();
 
       if (existingClient) {
-          // UPDATE: Cliente existe. Atualizamos dados, mas preservamos o ID original (PK).
           const updatePayload = {
               name: client.name,
               email: client.email,
@@ -208,16 +353,15 @@ export const db = {
 
           if (updateError) console.error("Erro ao atualizar cliente existente no create:", updateError);
 
-          // Retorna o objeto cliente com o ID real do banco
           return { 
               ...client, 
               id: existingClient.client_id, 
               phone: phoneClean, 
-              tags: currentTags 
+              tags: currentTags,
+              loyaltyBalance: existingClient.loyalty_balance || 0
           };
       }
 
-      // 2. INSERT: Cliente é novo
       const dbClient = {
         client_id: client.id, 
         name: client.name,
@@ -226,22 +370,22 @@ export const db = {
         tags: currentTags,
         last_contact_at: client.lastContactAt,
         created_at: client.createdAt,
-        funnel_stage: initialStage
+        funnel_stage: initialStage,
+        loyalty_balance: 0
       };
       
       const { error } = await supabase.from('clientes').insert(dbClient);
       
-      // Tratamento de Race Condition (inserido por outro processo entre o select e o insert)
-      if (error && error.code === '23505') { // Postgres Unique Violation
+      if (error && error.code === '23505') { 
           const { data: retryClient } = await supabase.from('clientes').select('*').eq('phone', phoneClean).maybeSingle();
           if (retryClient) {
-             return { ...client, id: retryClient.client_id, phone: phoneClean };
+             return { ...client, id: retryClient.client_id, phone: phoneClean, loyaltyBalance: retryClient.loyalty_balance || 0 };
           }
       }
       
       if (error) throw error;
       
-      return { ...client, phone: phoneClean, tags: currentTags, funnelStage: initialStage };
+      return { ...client, phone: phoneClean, tags: currentTags, funnelStage: initialStage, loyaltyBalance: 0 };
     },
     update: async (client: Client) => {
       const dbClient = {
@@ -275,6 +419,47 @@ export const db = {
     }
   },
 
+  // Serviço de Fidelidade
+  loyalty: {
+      getHistory: async (clientId: string): Promise<LoyaltyTransaction[]> => {
+          const { data, error } = await supabase
+              .from('loyalty_transactions')
+              .select('*')
+              .eq('client_id', clientId)
+              .order('created_at', { ascending: false });
+          
+          if (error) return [];
+          
+          return data.map((t: any) => ({
+              id: t.id,
+              clientId: t.client_id,
+              amount: t.amount,
+              description: t.description,
+              createdAt: t.created_at,
+              reservationId: t.reservation_id
+          }));
+      },
+      addTransaction: async (clientId: string, amount: number, description: string, userId?: string) => {
+          // Insere transação
+          const { error } = await supabase.from('loyalty_transactions').insert({
+              client_id: clientId,
+              amount: amount,
+              description: description,
+              created_by: userId
+          });
+          
+          if (error) throw error;
+
+          // Atualiza saldo do cliente
+          const { data: client } = await supabase.from('clientes').select('loyalty_balance').eq('client_id', clientId).single();
+          const currentBalance = client?.loyalty_balance || 0;
+          
+          await supabase.from('clientes').update({
+              loyalty_balance: currentBalance + amount
+          }).eq('client_id', clientId);
+      }
+  },
+
   reservations: {
     getAll: async (): Promise<Reservation[]> => {
       const { data, error } = await supabase.from('reservas').select('*');
@@ -299,7 +484,6 @@ export const db = {
         lanes: r.lanes || [],
         checkedInIds: r.checked_in_ids || [], 
         noShowIds: r.no_show_ids || [],
-        // Novos campos
         hasTableReservation: r.has_table_reservation,
         birthdayName: r.birthday_name,
         tableSeatCount: r.table_seat_count
@@ -325,7 +509,6 @@ export const db = {
         created_at: res.createdAt,
         checked_in_ids: res.checkedInIds || [], 
         no_show_ids: res.noShowIds || [],
-        // Novos campos
         has_table_reservation: res.hasTableReservation,
         birthday_name: res.birthdayName,
         table_seat_count: res.tableSeatCount
@@ -350,7 +533,6 @@ export const db = {
         guests: res.guests,
         checked_in_ids: res.checkedInIds || [], 
         no_show_ids: res.noShowIds || [],
-        // Novos campos
         has_table_reservation: res.hasTableReservation,
         birthday_name: res.birthdayName,
         table_seat_count: res.tableSeatCount
@@ -466,8 +648,14 @@ export const db = {
       
       const { error: configError } = await supabase.from('configuracoes').upsert(dbSettings);
       
+      window.dispatchEvent(new Event('settings_updated'));
+
       if (configError) {
-        throw new Error(`Falha ao salvar dados gerais: ${configError.message || configError.code}`);
+        const msg = configError.message || configError.code || 'Erro desconhecido';
+        if (msg.includes('column')) {
+             throw new Error(`Erro de Tabela: Colunas ausentes. Execute o SQL de atualização.`);
+        }
+        throw new Error(`Falha ao salvar dados gerais: ${msg}`);
       }
     },
 
