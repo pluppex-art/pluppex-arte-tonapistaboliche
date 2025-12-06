@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { db } from '../services/mockBackend';
-import { Loader2, Users, Briefcase, ChevronRight } from 'lucide-react';
+import { Loader2, Users, Briefcase, ChevronRight, Globe } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { useApp } from '../contexts/AppContext';
 
 const Login: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'CLIENT' | 'STAFF'>('CLIENT');
@@ -10,8 +11,8 @@ const Login: React.FC = () => {
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState(''); // For registration
-  const [phone, setPhone] = useState(''); // For registration
+  const [name, setName] = useState(''); 
+  const [phone, setPhone] = useState(''); 
   
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -22,11 +23,13 @@ const Login: React.FC = () => {
   const [establishmentName, setEstablishmentName] = useState('TÔ NA PISTA');
   
   const navigate = useNavigate();
+  const { refreshUser } = useApp(); // Importa o refreshUser do contexto
 
-  // Cleanup session on mount to avoid conflicts
+  // Cleanup session on mount
   useEffect(() => {
       localStorage.removeItem('tonapista_auth');
       localStorage.removeItem('tonapista_client_auth');
+      refreshUser(); // Garante que o app saiba que não tem ninguém logado
   }, []);
 
   // Fetch settings on mount
@@ -53,15 +56,22 @@ const Login: React.FC = () => {
       
       if (loginError || !user) {
         setError(loginError || 'E-mail ou senha inválidos.');
+        setIsLoading(false);
       } else {
+        // 1. Salva no Storage
         localStorage.setItem('tonapista_auth', JSON.stringify(user));
-        // Force refresh via window reload to clear any client state completely
-        window.location.href = window.location.origin + '/#/agenda';
+        
+        // 2. Atualiza o Contexto Global IMEDIATAMENTE
+        refreshUser();
+
+        // 3. Navega suavemente sem reload (Evita 404)
+        setTimeout(() => {
+            navigate('/agenda', { replace: true });
+        }, 100);
       }
     } catch (err) {
       console.error(err);
       setError('Erro ao processar login.');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -76,13 +86,13 @@ const Login: React.FC = () => {
           
           if (loginError || !client) {
               setError(loginError || 'E-mail ou senha inválidos.');
+              setIsLoading(false);
           } else {
               localStorage.setItem('tonapista_client_auth', JSON.stringify(client));
-              navigate('/minha-conta');
+              navigate('/minha-conta', { replace: true });
           }
       } catch (err) {
           setError('Erro ao conectar.');
-      } finally {
           setIsLoading(false);
       }
   };
@@ -107,13 +117,13 @@ const Login: React.FC = () => {
 
           if (regError || !client) {
               setError(regError || 'Erro ao criar conta.');
+              setIsLoading(false);
           } else {
               localStorage.setItem('tonapista_client_auth', JSON.stringify(client));
-              navigate('/minha-conta');
+              navigate('/minha-conta', { replace: true });
           }
       } catch (err) {
           setError('Erro ao registrar.');
-      } finally {
           setIsLoading(false);
       }
   };

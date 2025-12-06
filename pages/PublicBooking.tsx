@@ -1,10 +1,9 @@
-
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { db } from '../services/mockBackend';
 import { Integrations } from '../services/integrations';
-import { useApp } from '../contexts/AppContext'; // Context
-import { generateDailySlots, checkHourCapacity } from '../utils/availability'; // Utils
+import { useApp } from '../contexts/AppContext';
+import { generateDailySlots, checkHourCapacity } from '../utils/availability';
 import { EventType, ReservationStatus, PaymentStatus, Reservation, FunnelStage } from '../types';
 import { EVENT_TYPES, INITIAL_SETTINGS } from '../constants';
 import { CheckCircle, Calendar as CalendarIcon, Clock, Users, ChevronRight, DollarSign, ChevronLeft, Lock, LayoutDashboard, Loader2, UserPlus, Mail, Phone, User as UserIcon, AlertCircle, XCircle, ShieldCheck, CreditCard, ArrowRight, Cake, Utensils } from 'lucide-react';
@@ -14,7 +13,7 @@ const steps = ['Data', 'Configuração & Horário', 'Seus Dados', 'Resumo', 'Pag
 
 const PublicBooking: React.FC = () => {
   const navigate = useNavigate();
-  const { settings, user: currentUser, loading: appLoading } = useApp(); // Use Context
+  const { settings, user: currentUser, loading: appLoading } = useApp();
   
   const [currentStep, setCurrentStep] = useState(0);
   const [imgError, setImgError] = useState(false);
@@ -23,14 +22,10 @@ const PublicBooking: React.FC = () => {
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Validation State
   const [errors, setErrors] = useState<Record<string, boolean>>({});
-
-  // Draft State
   const [createdReservationIds, setCreatedReservationIds] = useState<string[]>([]);
   const [clientId, setClientId] = useState<string>('');
 
-  // Form State
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTimes, setSelectedTimes] = useState<string[]>([]);
   
@@ -53,7 +48,6 @@ const PublicBooking: React.FC = () => {
 
   const [viewDate, setViewDate] = useState(new Date());
 
-  // Dynamic Price from Context Settings
   const getPricePerHour = () => {
       if (!selectedDate || !settings) return INITIAL_SETTINGS.weekdayPrice;
       const [y, m, d] = selectedDate.split('-').map(Number);
@@ -69,7 +63,6 @@ const PublicBooking: React.FC = () => {
   const totalDuration = selectedTimes.length;
   const totalValue = currentPrice * formData.lanes * (totalDuration || 0);
 
-  // Load Reservations only
   useEffect(() => {
     const fetchData = async () => {
         setIsDataLoading(true);
@@ -110,7 +103,7 @@ const PublicBooking: React.FC = () => {
       const newErrors: Record<string, boolean> = {};
       let isValid = true;
 
-      if (currentStep === 1) { // Config
+      if (currentStep === 1) { 
           if (formData.wantsTable) {
               if (formData.type === EventType.ANIVERSARIO) {
                   if (!formData.birthdayName) newErrors.birthdayName = true;
@@ -125,7 +118,7 @@ const PublicBooking: React.FC = () => {
           }
       }
 
-      if (currentStep === 2) { // Dados
+      if (currentStep === 2) { 
           if (!formData.name.trim()) newErrors.name = true;
           if (!formData.email.trim() || !isValidEmail(formData.email)) newErrors.email = true;
           if (!formData.whatsapp.trim() || !isValidPhone(formData.whatsapp)) newErrors.whatsapp = true;
@@ -183,7 +176,6 @@ const PublicBooking: React.FC = () => {
     if (currentStep > 0) setCurrentStep(c => c - 1);
   };
 
-  // --- Step 1: Calendar Logic ---
   const isDateAllowed = (date: Date) => {
     const day = date.getDay();
     const today = new Date();
@@ -255,7 +247,6 @@ const PublicBooking: React.FC = () => {
     );
   };
 
-  // --- Step 2: Time Logic (Centralized) ---
   const timeSlots = generateDailySlots(selectedDate, settings, existingReservations);
 
   const toggleTimeSelection = (time: string) => {
@@ -294,7 +285,6 @@ const PublicBooking: React.FC = () => {
     return blocks;
   };
 
-  // --- Logic to Create PENDING Booking ---
   const createPendingReservations = async () => {
       if (createdReservationIds.length > 0) {
           setCurrentStep(4);
@@ -304,7 +294,6 @@ const PublicBooking: React.FC = () => {
       setIsSaving(true);
       try {
           const blocks = getReservationBlocks();
-          // Re-check capacity for safety using Utility
           const allRes = await db.reservations.getAll();
           
           for (const block of blocks) {
@@ -401,7 +390,6 @@ const PublicBooking: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col">
-      {/* Header */}
       <header className="bg-slate-900 p-4 shadow-md border-b border-slate-800 sticky top-0 z-20">
         <div className="max-w-3xl mx-auto flex justify-between items-center">
           {!imgError ? (
@@ -429,7 +417,6 @@ const PublicBooking: React.FC = () => {
 
       <main className="flex-1 p-4 md:p-8">
         <div className="max-w-3xl mx-auto">
-          {/* Progress Bar */}
           {currentStep < 5 && (
             <div className="mb-8">
                 <div className="flex justify-between mb-2">
